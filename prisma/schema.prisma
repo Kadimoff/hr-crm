@@ -1,0 +1,840 @@
+// ============================================================================
+//  ASOİU HR CRM — Kadr və Əməkhaqqı İdarəetmə Sistemi
+//  PostgreSQL 16+ · Prisma ORM
+//
+//  Bölmələr:
+//    1. Təşkilati struktur (Struktur bölmələri, Vəzifələr, Ştat cədvəli)
+//    2. Fiziki şəxslər və əmək müqavilələri
+//    3. Paralel profillər (əmək fəaliyyəti, hərbi uçot, əlillik, ailə)
+//    4. Akademik portfolio (fayl 6, 7, 8)
+//    5. Məzuniyyət qalıqları və hərəkətlər (fayl 3, 9, 10)
+//    6. İdxal (ETL) mərhələləndirmə cədvəlləri
+//    7. İstifadəçilər, sessiyalar və audit jurnalı
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------------------------------
+//  ENUMS
+// ----------------------------------------------------------------------------
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum MaritalStatus {
+  SINGLE
+  MARRIED
+  DIVORCED
+  WIDOWED
+}
+
+enum PositionCategory {
+  QULLUQCU // qulluqçu
+  FEHLE // fəhlə
+}
+
+enum StaffCategory {
+  INZIBATI // İnzibati heyət
+  PROFESSOR_MUELLIM // Professor-müəllim heyəti
+  TEDRIS_KOMEKCI // Tədris-köməkçi heyət
+  XIDMETEDICI // Xidmətedici heyət
+}
+
+enum EmploymentStatus {
+  ACTIVE
+  ON_LEAVE
+  TERMINATED
+}
+
+enum DisabilityGroup {
+  GROUP_1
+  GROUP_2
+  GROUP_3
+  CHILD_UNDER_18 // 18 yaşadək sağlamlıq imkanları məhdud uşaq
+}
+
+/// 9 İşdə iştirak etməmə.xlsx — 3 vərəq
+enum AbsenceType {
+  SICK // xəstəlik
+  UNKNOWN // naməlum səbəb
+  SOCIAL_PAID // sm — (qismən) ödənişli sosial məzuniyyət
+  SOCIAL_UNPAID // ö/sm — ödənişsiz sosial məzuniyyət
+  UNPAID // ö/m — ödənişsiz məzuniyyət
+}
+
+enum AcademicDegreeType {
+  PHD // Fəlsəfə doktoru
+  DSC // Elmlər doktoru
+}
+
+enum AcademicTitleType {
+  DOCENT
+  PROFESSOR
+  CORRESPONDING_MEMBER // AMEA müxbir üzvü
+  ACADEMICIAN // AMEA həqiqi üzvü
+}
+
+enum AwardKind {
+  HONORARY_TITLE // Fəxri ad
+  STATE_AWARD // Dövlət təltifi
+  PRIZE // Mükafat
+}
+
+enum SkillKind {
+  GENERAL
+  SOFTWARE
+}
+
+/// Bilmə səviyyəsi: əla / yaxşı / kafi
+enum Proficiency {
+  EXCELLENT
+  GOOD
+  SATISFACTORY
+}
+
+enum ImportBatchStatus {
+  UPLOADED
+  VALIDATING
+  READY // xətasız, commit-ə hazır
+  NEEDS_REVIEW
+  COMMITTING
+  COMPLETED
+  FAILED
+}
+
+enum ImportFileStatus {
+  QUEUED
+  PARSING
+  VALIDATED
+  HAS_ERRORS
+  COMMITTED
+  FAILED
+}
+
+enum StagingRowStatus {
+  PENDING
+  VALID
+  INVALID
+  COMMITTED
+}
+
+/// Topoloji idxal ardıcıllığı — dəyər sırası icra sırasıdır.
+enum ImportStage {
+  S1_DEPARTMENTS
+  S2_POSITIONS
+  S3_STAFFING
+  S4_PERSONS
+  S5_EMPLOYMENTS
+  S6_PROFILES
+  S7_LEAVE_BALANCES
+  S8_MOVEMENTS
+}
+
+// ----------------------------------------------------------------------------
+//  1. TƏŞKİLATİ STRUKTUR
+// ----------------------------------------------------------------------------
+
+/// 5 Struktur bölmələri.xlsx — 4 səviyyəli ağac
+model Department {
+  id        String       @id @default(cuid())
+  code      String       @unique
+  name      String
+  level     Int // 1..4
+  isFaculty Boolean      @default(false)
+  isChair   Boolean      @default(false) // kafedra
+  parentId  String?
+  parent    Department?  @relation("DepartmentTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children  Department[] @relation("DepartmentTree")
+  createdOn DateTime     @db.Date
+  closedOn  DateTime?    @db.Date
+
+  staffingUnits StaffingUnit[]
+  employments   Employment[]
+  heads         User[] // şöbə rəhbərləri (DEPT_HEAD rolu)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([parentId])
+  @@index([level])
+}
+
+/// 1 Kadr Cədvəlləri.xlsx → Vəzifələr
+model Position {
+  id                         String           @id @default(cuid())
+  code                       String           @unique
+  name                       String           @unique // vəzifələrin adları təkrarlana bilməz
+  category                   PositionCategory
+  staffCategory              StaffCategory
+  basicLeaveDays             Int // 21 / 30 / 42 / 48 / 56
+  hazardousLeaveDays         Int              @default(0)
+  hazardousAllowancePct      Decimal?         @db.Decimal(5, 2) // ağır/zərərli şəraitə görə əlavə, %
+  isPedagogical              Boolean          @default(false) // pedaqoji heyət
+  isScientific               Boolean          @default(false) // elmi staj
+  isScientificPedagogical    Boolean          @default(false) // elmi-pedaqoji staj
+  isAdministrativeManagement Boolean          @default(false) // inzibati idarəetmə personalı
+  validFrom                  DateTime         @db.Date // vəzifənin yaradılma tarixi
+  validTo                    DateTime?        @db.Date // vəzifənin bağlanma tarixi
+
+  staffingUnits StaffingUnit[]
+  employments   Employment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([staffCategory])
+}
+
+/// 4 Ştat cədvəli.xlsx — dövr üzrə ştat vahidləri
+model StaffingUnit {
+  id           String     @id @default(cuid())
+  periodDate   DateTime   @db.Date
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  positionId   String
+  position     Position   @relation(fields: [positionId], references: [id], onDelete: Restrict)
+  unitCount    Decimal    @db.Decimal(6, 2) // 0.25, 0.5, 1.0 ...
+  minSalary    Decimal    @db.Decimal(12, 2)
+  maxSalary    Decimal    @db.Decimal(12, 2)
+  salaryType   String? // maaşın növü
+  schedule     String // iş rejimi / iş qrafiki
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([periodDate, departmentId, positionId])
+  @@index([departmentId])
+  @@index([positionId])
+}
+
+// ----------------------------------------------------------------------------
+//  2. FİZİKİ ŞƏXSLƏR VƏ ƏMƏK MÜQAVİLƏLƏRİ
+// ----------------------------------------------------------------------------
+
+/// 1 Kadr Cədvəlləri.xlsx → Fiziki şəxslər
+model Person {
+  id            String         @id @default(cuid())
+  code          String         @unique // əməkdaş kodu
+  fullName      String // "Soyadı Adı Atasının adı" — axtarış üçün
+  lastName      String
+  firstName     String
+  patronymic    String?
+  gender        Gender
+  birthDate     DateTime       @db.Date
+  maritalStatus MaritalStatus?
+
+  // Əlaqə
+  mobilePhone       String?
+  workPhone         String? // xidməti telefon
+  email             String?
+  registeredAddress String?
+  livingAddress     String?
+
+  // Sosial sığorta
+  ssn String? @unique // Sosial sığorta şəhadətnaməsinin nömrəsi
+
+  // Doğum yeri
+  birthCountry  String?
+  birthDistrict String?
+  birthCity     String?
+
+  // Şəxsiyyəti təsdiq edən sənəd
+  idDocType      String // Şəxsiyyət vəsiqəsi, pasport, ...
+  idDocSeries    String?
+  idDocNumber    String
+  idDocIssueDate DateTime? @db.Date
+  idDocIssuedBy  String?
+  fin            String    @unique @db.Char(7) // FİN kod — 7 simvol
+
+  // İşə qəbul tarixinə olan staj (il / ay / gün)
+  laborSeniorityYears                  Int @default(0)
+  laborSeniorityMonths                 Int @default(0)
+  laborSeniorityDays                   Int @default(0)
+  scientificSeniorityYears             Int @default(0)
+  scientificSeniorityMonths            Int @default(0)
+  scientificSeniorityDays              Int @default(0)
+  scientificPedagogicalSeniorityYears  Int @default(0)
+  scientificPedagogicalSeniorityMonths Int @default(0)
+  scientificPedagogicalSeniorityDays   Int @default(0)
+  unecSeniorityYears                   Int @default(0)
+  unecSeniorityMonths                  Int @default(0)
+  unecSeniorityDays                    Int @default(0)
+  insuranceSeniorityYears              Int @default(0)
+  insuranceSeniorityMonths             Int @default(0)
+  insuranceSeniorityDays               Int @default(0)
+
+  // Vergi güzəşti (Vergi Məcəlləsi 102-ci maddə bəndi, məs. "102.2.1")
+  taxExemptionClause String?
+
+  citizenship  String?
+  nationality  String?
+  socialOrigin String?
+
+  // Əcnəbi məlumatları
+  isForeigner       Boolean   @default(false)
+  visaNumber        String?
+  visaIssueDate     DateTime? @db.Date
+  visaExpiryDate    DateTime? @db.Date
+  passportNumber    String? // pasportun seriya və nömrəsi
+  passportIssueDate DateTime? @db.Date
+  passportExpiry    DateTime? @db.Date
+  arrivalDate       DateTime? @db.Date
+
+  isIdpOrRefugee      Boolean @default(false) // məcburi köçkün
+  /// Kvota üzrə qəbul edilmiş və əsas məzuniyyəti 21/30-dan fərqli olanlar üçün — vəzifənin əsas məzuniyyətini ƏVƏZ edir
+  quotaBasicLeaveDays Int?
+
+  /// Şablonlardan kənar sahələr üçün genişlənmə
+  extensions Json @default("{}") @db.JsonB
+
+  employments       Employment[]
+  workHistory       WorkHistory[]
+  militaryRecord    MilitaryRecord?
+  disabilities      Disability[]
+  familyMembers     FamilyMember[]
+  leaveBalances     LeaveBalance[]
+  absences          Absence[]
+  intellectualProps IntellectualProperty[]
+  projects          Project[]
+  events            ScientificEvent[]
+  publications      Publication[]
+  attestations      Attestation[]
+  researchTopics    ResearchTopic[]
+  languages         LanguageProficiency[]
+  educations        Education[]
+  skills            Skill[]
+  academicDegrees   AcademicDegree[]
+  academicTitles    AcademicTitle[]
+  awards            Award[]
+  partyMemberships  PartyMembership[]
+  electedOrgans     ElectedOrgan[]
+  legalLiabilities  LegalLiability[]
+
+  // Qeydiyyat və arxiv (soft delete) — kim, nə vaxt
+  createdById String?
+  createdBy   User?     @relation("PersonCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById String?
+  updatedBy   User?     @relation("PersonUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  deletedById String?
+  deletedBy   User?     @relation("PersonDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([fullName])
+  @@index([deletedAt])
+}
+
+/// 1 Kadr Cədvəlləri.xlsx → Əməkdaşlar
+model Employment {
+  id           String           @id @default(cuid())
+  personId     String
+  person       Person           @relation(fields: [personId], references: [id], onDelete: Cascade)
+  positionId   String
+  position     Position         @relation(fields: [positionId], references: [id], onDelete: Restrict)
+  departmentId String
+  department   Department       @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  hireDate     DateTime         @db.Date
+  schedule     String // iş rejimi / iş qrafiki
+  paymentForm  String // ödəniş forması (şablondakı mətn)
+  baseSalary   Decimal          @db.Decimal(12, 2) // oklad
+  unitShare    Decimal          @default(1) @db.Decimal(4, 2) // tutduğu ştat vahidi
+  isPrimary    Boolean          @default(true) // əsas iş yeri / əvəzçilik
+  status       EmploymentStatus @default(ACTIVE)
+
+  // 10 İşdən azad olunmuş əməkdaşlar.xlsx
+  terminationDate    DateTime? @db.Date
+  terminationArticle String? // AR ƏM maddəsi
+
+  salaryHistory SalaryRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([personId, positionId, departmentId, hireDate])
+  @@index([departmentId, status])
+  @@index([positionId, status])
+}
+
+/// Oklad dəyişikliklərinin temporal tarixçəsi
+model SalaryRecord {
+  id           String     @id @default(cuid())
+  employmentId String
+  employment   Employment @relation(fields: [employmentId], references: [id], onDelete: Cascade)
+  baseSalary   Decimal    @db.Decimal(12, 2)
+  validFrom    DateTime   @db.Date
+  validTo      DateTime?  @db.Date
+
+  @@index([employmentId, validFrom])
+}
+
+// ----------------------------------------------------------------------------
+//  3. PARALEL PROFİLLƏR
+// ----------------------------------------------------------------------------
+
+/// 1 Kadr Cədvəlləri.xlsx → Əmək fəaliyyəti
+model WorkHistory {
+  id                      String    @id @default(cuid())
+  personId                String
+  person                  Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  organization            String
+  position                String
+  startDate               DateTime  @db.Date
+  endDate                 DateTime? @db.Date
+  countsScientific        Boolean   @default(false)
+  countsScientificPedagog Boolean   @default(false)
+  countsUnec              Boolean   @default(false)
+  terminationReason       String?
+  laborCodeArticle        String?
+
+  @@index([personId])
+}
+
+/// 1 Kadr Cədvəlləri.xlsx → Hərbi uçot
+model MilitaryRecord {
+  id              String  @id @default(cuid())
+  personId        String  @unique
+  person          Person  @relation(fields: [personId], references: [id], onDelete: Cascade)
+  obligation      String // hərbi mükəlləfiyyət
+  rank            String?
+  profile         String? // tərkib / profil
+  reserveCategory String?
+  specialtyVus    String? // HUİ (VUS)
+  fitness         String? // hərbi xidmətə yararlılıq
+  draftBoard      String? // hərbi komissarlıq
+  status          String? // uçot vəziyyəti
+}
+
+/// 1 Kadr Cədvəlləri.xlsx → Əlillik məlumatları
+model Disability {
+  id         String          @id @default(cuid())
+  personId   String
+  person     Person          @relation(fields: [personId], references: [id], onDelete: Cascade)
+  certSeries String?
+  certNumber String
+  issueDate  DateTime        @db.Date
+  group      DisabilityGroup
+  validFrom  DateTime        @db.Date
+  validTo    DateTime?       @db.Date // null = müddətsiz
+
+  @@index([personId])
+}
+
+/// 2 Əməkdaşların ailə məlumatları.xlsx
+model FamilyMember {
+  id               String   @id @default(cuid())
+  personId         String
+  person           Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+  fullName         String
+  relation         String // ata, ana, həyat yoldaşı, oğul, qız, əlil uşaq ...
+  isChild          Boolean  @default(false)
+  isDisabledChild  Boolean  @default(false)
+  birthDate        DateTime @db.Date
+  /// Qayda: uşaq işə qəbuldan sonra doğulubsa = doğum tarixi, əks halda = işə qəbul tarixi
+  registrationDate DateTime @db.Date
+  workplace        String?
+  position         String?
+
+  @@index([personId])
+}
+
+// ----------------------------------------------------------------------------
+//  4. AKADEMİK PORTFOLİO
+// ----------------------------------------------------------------------------
+
+/// 6 Digər məlumatlar.xlsx → Patent və şəhadətnamələr (bir sətirdə ixtira + patent + şəhadətnamə)
+model IntellectualProperty {
+  id                String    @id @default(cuid())
+  personId          String
+  person            Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  inventionName     String
+  inventionDate     DateTime? @db.Date
+  patentName        String?
+  patentNumber      String?
+  patentDate        DateTime? @db.Date
+  certificateName   String?
+  certificateNumber String?
+  certificateDate   DateTime? @db.Date
+
+  @@index([personId])
+}
+
+/// 6 Digər məlumatlar.xlsx → Layihələr və qrantlar
+model Project {
+  id          String    @id @default(cuid())
+  personId    String
+  person      Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  title       String
+  projectDate DateTime? @db.Date
+  startDate   DateTime? @db.Date
+  endDate     DateTime? @db.Date
+  grantAmount Decimal?  @db.Decimal(14, 2)
+  comment     String?
+
+  @@index([personId])
+}
+
+/// 6 Digər məlumatlar.xlsx → Tədbirlərdə iştirak
+model ScientificEvent {
+  id        String    @id @default(cuid())
+  personId  String
+  person    Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  eventType String
+  date      DateTime? @db.Date
+  topic     String?
+  comment   String?
+
+  @@index([personId])
+}
+
+/// 6 Digər məlumatlar.xlsx → Əməkdaşın əsərləri
+model Publication {
+  id            String    @id @default(cuid())
+  personId      String
+  person        Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  title         String
+  publishedDate DateTime? @db.Date
+  topic         String?
+  comment       String?
+
+  @@index([personId])
+}
+
+/// 6 Digər məlumatlar.xlsx → Attestasiya məlumatları
+model Attestation {
+  id          String    @id @default(cuid())
+  personId    String
+  person      Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  date        DateTime  @db.Date
+  orderDate   DateTime? @db.Date
+  orderNumber String?
+  result      String
+
+  @@index([personId])
+}
+
+/// 7 Əməkdaşların elmi tədqiqat və işləmələri.xlsx
+model ResearchTopic {
+  id        String    @id @default(cuid())
+  personId  String
+  person    Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  topic     String
+  category  String? // elmi tədqiqat və ya işləmə üzrə bölgü
+  domain    String? // elm sahəsi
+  startDate DateTime? @db.Date
+  endDate   DateTime? @db.Date
+
+  @@index([personId])
+}
+
+/// 8 Fiziki şəxsə aid məlumatlar.xlsx → Dil bilikləri
+model LanguageProficiency {
+  id       String      @id @default(cuid())
+  personId String
+  person   Person      @relation(fields: [personId], references: [id], onDelete: Cascade)
+  language String
+  level    Proficiency
+
+  @@unique([personId, language])
+}
+
+/// 8 Fiziki şəxsə aid məlumatlar.xlsx → Təhsil məlumatları
+model Education {
+  id                  String    @id @default(cuid())
+  personId            String
+  person              Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  educationType       String // bakalavr, magistr və s.
+  institution         String
+  specialty           String?
+  diplomaSeriesNumber String?
+  startDate           DateTime? @db.Date // daxil olduğu il
+  graduationDate      DateTime? @db.Date // bitirdiyi il
+  qualification       String?
+  specialization      String? // ixtisaslaşma sahəsi
+  studyForm           String? // əyani / qiyabi / distant
+  isAbroad            Boolean   @default(false)
+
+  @@index([personId])
+}
+
+/// 8 Fiziki şəxsə aid məlumatlar.xlsx → Peşə bacarıqları / Kompyuter bilikləri
+model Skill {
+  id          String       @id @default(cuid())
+  personId    String
+  person      Person       @relation(fields: [personId], references: [id], onDelete: Cascade)
+  kind        SkillKind
+  name        String
+  proficiency Proficiency?
+
+  @@unique([personId, kind, name])
+}
+
+/// 8 Fiziki şəxsə aid məlumatlar.xlsx → Elmi dərəcələr
+model AcademicDegree {
+  id                  String             @id @default(cuid())
+  personId            String
+  person              Person             @relation(fields: [personId], references: [id], onDelete: Cascade)
+  degree              AcademicDegreeType
+  degreeName          String // şablondakı tam ad, məs. "İqtisad üzrə fəlsəfə doktoru"
+  awardDate           DateTime           @db.Date
+  field               String? // elmi fəaliyyət sahəsi
+  dissertationCouncil String?
+  diplomaSeriesNumber String?
+  diplomaCode         String? // diplomun şifrəsi
+  issuingInstitution  String?
+
+  @@index([personId])
+}
+
+/// 8 Fiziki şəxsə aid məlumatlar.xlsx → Elmi adlar
+model AcademicTitle {
+  id                 String            @id @default(cuid())
+  personId           String
+  person             Person            @relation(fields: [personId], references: [id], onDelete: Cascade)
+  title              AcademicTitleType
+  titleName          String
+  awardDate          DateTime          @db.Date
+  direction          String? // elmi ad istiqaməti
+  attestatSeries     String?
+  diplomaNumber      String?
+  issuingInstitution String?
+
+  @@index([personId])
+}
+
+/// 8 Fiziki şəxsə aid məlumatlar.xlsx → Fəxri adlar, Dövlət təltifləri, Mükafatlar
+model Award {
+  id          String    @id @default(cuid())
+  personId    String
+  person      Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  kind        AwardKind
+  name        String
+  awardDate   DateTime? @db.Date
+  orderNumber String? // verilmə əmrinin nömrəsi
+  issuedBy    String?
+
+  @@index([personId])
+}
+
+/// 8 Fiziki şəxsə aid məlumatlar.xlsx → Partiya mənsubluğu
+model PartyMembership {
+  id            String    @id @default(cuid())
+  personId      String
+  person        Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  isMember      Boolean
+  party         String?
+  cardNumber    String?
+  cardIssueDate DateTime? @db.Date
+
+  @@index([personId])
+}
+
+/// 8 Fiziki şəxsə aid məlumatlar.xlsx → Seçki orqanlarında iştirakı
+model ElectedOrgan {
+  id          String    @id @default(cuid())
+  personId    String
+  person      Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  location    String?
+  organName   String
+  position    String?
+  electedDate DateTime? @db.Date
+  exitDate    DateTime? @db.Date
+
+  @@index([personId])
+}
+
+/// 8 Fiziki şəxsə aid məlumatlar.xlsx → Məhkəmə məsuliyyəti
+model LegalLiability {
+  id       String    @id @default(cuid())
+  personId String
+  person   Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  reason   String
+  date     DateTime? @db.Date
+
+  @@index([personId])
+}
+
+// ----------------------------------------------------------------------------
+//  5. MƏZUNİYYƏT QALIQLARI VƏ HƏRƏKƏTLƏR
+// ----------------------------------------------------------------------------
+
+/// 3 Məzuniyyətlərin qalıqları.xlsx — 01.04.2025 tarixinə tam iş ili qalıqları (4 vərəq bir sətirdə birləşir)
+model LeaveBalance {
+  id             String   @id @default(cuid())
+  personId       String
+  person         Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+  asOfDate       DateTime @db.Date
+  periodStart    DateTime @db.Date
+  periodEnd      DateTime @db.Date // = periodStart + 1 il - 1 gün
+  basicDays      Decimal  @default(0) @db.Decimal(6, 2)
+  seniorityDays  Decimal  @default(0) @db.Decimal(6, 2)
+  hazardousDays  Decimal  @default(0) @db.Decimal(6, 2)
+  motherhoodDays Decimal  @default(0) @db.Decimal(6, 2) // 14 yaşadək uşağı olan qadınlar
+
+  @@unique([personId, periodStart])
+}
+
+/// 9 İşdə iştirak etməmə.xlsx
+model Absence {
+  id        String      @id @default(cuid())
+  personId  String
+  person    Person      @relation(fields: [personId], references: [id], onDelete: Cascade)
+  type      AbsenceType
+  startDate DateTime    @db.Date
+  endDate   DateTime    @db.Date
+
+  @@index([personId, startDate])
+}
+
+// ----------------------------------------------------------------------------
+//  6. İDXAL (ETL) MƏRHƏLƏLƏNDİRMƏ
+// ----------------------------------------------------------------------------
+
+model ImportBatch {
+  id        String            @id @default(cuid())
+  status    ImportBatchStatus @default(UPLOADED)
+  createdBy String?
+  creator   User?             @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  files     ImportFile[]
+  rows      StagingRow[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ImportFile {
+  id            String           @id @default(cuid())
+  batchId       String
+  batch         ImportBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  templateKey   String // "kadr", "family", "leave", ...
+  fileName      String
+  storagePath   String
+  status        ImportFileStatus @default(QUEUED)
+  totalRows     Int              @default(0)
+  validRows     Int              @default(0)
+  invalidRows   Int              @default(0)
+  committedRows Int              @default(0)
+  /// Struktur xətaları (başlıq uyğunsuzluğu, çatışmayan vərəq)
+  fileErrors    Json             @default("[]") @db.JsonB
+  rows          StagingRow[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([batchId])
+}
+
+model StagingRow {
+  id        String           @id @default(cuid())
+  batchId   String
+  batch     ImportBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  fileId    String
+  file      ImportFile       @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  stage     ImportStage
+  sheetKey  String // "persons", "positions", "departments2", ...
+  rowNumber Int
+  /// Xam hüceyrə dəyərləri (sütun açarı → mətn)
+  data      Json             @db.JsonB
+  /// [{ field, tier: "syntactic"|"semantic"|"reference", message }]
+  errors    Json             @default("[]") @db.JsonB
+  status    StagingRowStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([fileId, sheetKey, rowNumber])
+  @@index([batchId, stage, status])
+}
+
+// ----------------------------------------------------------------------------
+//  7. İSTİFADƏÇİLƏR, SESSİYALAR, AUDİT JURNALI
+// ----------------------------------------------------------------------------
+
+enum UserRole {
+  ROOT // sistem administratoru — istifadəçilər və audit jurnalı
+  HR // kadr əməkdaşı — əməkdaşların əlavəsi, redaktəsi, idxal
+  DEPT_HEAD // şöbə rəhbəri — yalnız öz bölməsinin (alt bölmələr daxil) əməkdaşlarına baxış
+}
+
+model User {
+  id           String      @id @default(cuid())
+  username     String      @unique // kiçik hərflə saxlanılır
+  fullName     String
+  passwordHash String
+  role         UserRole
+  departmentId String? // DEPT_HEAD üçün məcburi
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  isActive     Boolean     @default(true)
+  lastLoginAt  DateTime?
+  createdById  String?
+  createdBy    User?       @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers User[]      @relation("UserCreatedBy")
+
+  sessions       Session[]
+  auditLogs      AuditLog[]
+  personsCreated Person[]      @relation("PersonCreatedBy")
+  personsUpdated Person[]      @relation("PersonUpdatedBy")
+  personsDeleted Person[]      @relation("PersonDeletedBy")
+  importBatches  ImportBatch[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Session {
+  id        String   @id // tokenin SHA-256 heşi — tokenin özü yalnız cookie-də
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+enum AuditAction {
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+  IMPORT
+  EXPORT
+  PRINT
+  PASSWORD_RESET
+}
+
+/// Dəyişməz jurnal — yalnız əlavə olunur
+model AuditLog {
+  id        String      @id @default(cuid())
+  userId    String?
+  user      User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  username  String? // istifadəçi silinsə/adı dəyişsə də jurnalda qalsın
+  action    AuditAction
+  entity    String // "Person", "User", "ImportBatch", "Report", "Session"
+  entityId  String?
+  summary   String
+  /// UPDATE üçün: { sahə: [əvvəl, sonra] }; CREATE/DELETE üçün qeydin snapshot-u
+  changes   Json?       @db.JsonB
+  ip        String?
+  createdAt DateTime    @default(now())
+
+  @@index([createdAt])
+  @@index([entity, entityId])
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
