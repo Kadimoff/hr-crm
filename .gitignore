@@ -5,3 +5,4 @@ storage/uploads/*
 !storage/uploads/.gitkeep
 next-env.d.ts
 *.tsbuildinfo
+storage/backups/

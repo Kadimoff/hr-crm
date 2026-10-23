@@ -32,7 +32,7 @@ type Dept = { value: string; label: string; hint?: string };
 
 const ROLE_VARIANT: Record<UserRole, "default" | "outline" | "warning"> = { ROOT: "warning", HR: "default", DEPT_HEAD: "outline" };
 const ROLE_HINT: Record<UserRole, string> = {
-  ROOT: "Hər şey + istifadəçilər və audit jurnalı",
+  ROOT: "Hər şey + istifadəçilər, audit jurnalı, backup və bazanın təmizlənməsi",
   HR: "Əməkdaşların əlavəsi, redaktəsi, silinməsi, idxal, hesabatlar",
   DEPT_HEAD: "Yalnız öz bölməsinin əməkdaşlarına baxış, çap, hesabatlar",
 };

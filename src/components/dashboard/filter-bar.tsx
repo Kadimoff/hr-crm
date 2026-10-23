@@ -1,6 +1,6 @@
 "use client";
 
-import { RotateCcwIcon, XIcon } from "lucide-react";
+import { RotateCcwIcon, SlidersHorizontalIcon, XIcon } from "lucide-react";
 import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -71,8 +71,11 @@ export function FilterBar({ rows, departments }: { rows: DashboardRow[]; departm
   const chips = FILTER_KEYS.filter((k) => filters[k]).map((k) => ({ key: k, label: k === "department" ? deptName(filters[k]!) : filters[k]! }));
 
   return (
-    <div className="mb-4 flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-xs">
+    <div className="flex flex-col gap-3 rounded-2xl border bg-card p-3 shadow-xs">
       <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+        <span className="col-span-2 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground sm:col-span-1 sm:mr-1">
+          <SlidersHorizontalIcon className="size-3.5" /> Filtrlər
+        </span>
         <div className="col-span-2 sm:col-span-1">
           <Slicer k="department" options={deptOptions} placeholder="Struktur" />
         </div>
@@ -80,6 +83,7 @@ export function FilterBar({ rows, departments }: { rows: DashboardRow[]; departm
         <Slicer k="year" options={years} placeholder="İl" />
         <Slicer k="gender" options={GENDERS.map((g) => ({ value: g, label: g }))} placeholder="Cins" />
         <Slicer k="degree" options={DEGREES.map((g) => ({ value: g, label: g }))} placeholder="Elmi dərəcə" />
+        <span className="ml-auto hidden text-[11px] text-muted-foreground xl:inline">Qrafiklərə klik də filtr kimi işləyir</span>
       </div>
       {active && (
         <div className="flex flex-wrap items-center gap-1.5 border-t pt-3">

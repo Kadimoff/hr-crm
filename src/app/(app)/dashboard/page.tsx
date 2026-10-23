@@ -11,6 +11,12 @@ import { getRecentImports } from "@/lib/queries";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "İdarə paneli" };
 
+/** Tədris ili sentyabrdan başlayır: 2025/2026 */
+function academicYear(d = new Date()) {
+  const y = d.getFullYear();
+  return d.getMonth() >= 8 ? `${y}/${y + 1}` : `${y - 1}/${y}`;
+}
+
 export default async function DashboardPage() {
   const user = await requireUser();
   const canImport = can(user.role, "import");
@@ -19,6 +25,7 @@ export default async function DashboardPage() {
     <>
       <PageHeader
         title="İdarə paneli"
+        badge={`${academicYear()} tədris ili`}
         description={
           user.role === "DEPT_HEAD"
             ? `${user.departmentName ?? "Bölmə"} və alt bölmələri · qrafiklərə klik edərək filtrləyin`
@@ -26,9 +33,8 @@ export default async function DashboardPage() {
         }
       />
       <Suspense>
-        <DashboardView data={data} />
+        <DashboardView data={data} aside={canImport && recent.length > 0 ? <RecentImports batches={recent} /> : undefined} />
       </Suspense>
-      {canImport && <RecentImports batches={recent} />}
     </>
   );
 }

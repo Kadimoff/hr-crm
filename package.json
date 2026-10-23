@@ -12,6 +12,7 @@
     "test": "tsx --test tests/*.test.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
+    "db:seed": "tsx --env-file=.env prisma/seed.ts",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio"
   },

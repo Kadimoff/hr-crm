@@ -4,7 +4,7 @@ import { ChevronRightIcon, FilterXIcon } from "lucide-react";
 import { Fragment, useMemo } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, LabelList, Pie, PieChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { applyFilters, bucketize, CATEGORIES, GENDERS, type Bucket, type DashboardRow, type DepartmentOption } from "@/lib/dashboard/filters";
+import { ACADEMIC_CATEGORY, applyFilters, bucketize, CATEGORIES, GENDERS, type Bucket, type DashboardRow, type DepartmentOption } from "@/lib/dashboard/filters";
 import { cn, formatNumber } from "@/lib/utils";
 import { useDashboardFilters } from "./filter-context";
 
@@ -16,16 +16,40 @@ const GENDER_COLOR: Record<string, string> = { Kişi: "var(--chart-1)", Qadın: 
 /** Seçim varsa — seçilən tam, qalanları solğun */
 const opacityFor = (selected: string | undefined, key: string) => (!selected || selected === key ? 1 : DIM);
 
-export function ChartCard({ title, description, className, contentClassName, children, header }: { title: string; description?: string; className?: string; contentClassName?: string; children: React.ReactNode; header?: React.ReactNode }) {
+export function ChartCard({ title, description, className, contentClassName, children, header, badge }: { title: string; description?: string; className?: string; contentClassName?: string; children: React.ReactNode; header?: React.ReactNode; badge?: React.ReactNode }) {
   return (
     <Card className={cn("flex min-w-0 flex-col", className)}>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        {description && <CardDescription>{description}</CardDescription>}
+      <CardHeader className="pb-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle>{title}</CardTitle>
+            {description && <CardDescription className="mt-0.5">{description}</CardDescription>}
+          </div>
+          {badge}
+        </div>
         {header}
       </CardHeader>
-      <CardContent className={contentClassName}>{children}</CardContent>
+      <CardContent className={cn("min-w-0", contentClassName)}>{children}</CardContent>
     </Card>
+  );
+}
+
+/** Kart başlığının sağındakı xülasə çipi */
+export function Chip({ tone = "muted", children, title }: { tone?: "muted" | "primary" | "success" | "warning" | "danger"; children: React.ReactNode; title?: string }) {
+  return (
+    <span
+      title={title}
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold whitespace-nowrap tabular-nums",
+        tone === "muted" && "bg-muted text-muted-foreground",
+        tone === "primary" && "bg-primary/10 text-primary",
+        tone === "success" && "bg-success-soft text-success",
+        tone === "warning" && "bg-warning-soft text-warning",
+        tone === "danger" && "bg-danger-soft text-danger",
+      )}
+    >
+      {children}
+    </span>
   );
 }
 
@@ -66,7 +90,7 @@ function BucketTooltip({ active, payload, withPayroll = true }: { active?: boole
 //  İşə qəbul dinamikası → year
 // ----------------------------------------------------------------------------
 
-export function HiresChart({ rows }: { rows: DashboardRow[] }) {
+export function HiresChart({ rows, className }: { rows: DashboardRow[]; className?: string }) {
   const { filters, toggle } = useDashboardFilters();
   const chart = useMemo(() => {
     const thisYear = new Date().getFullYear();
@@ -74,13 +98,24 @@ export function HiresChart({ rows }: { rows: DashboardRow[] }) {
     const start = Math.min(thisYear - 9, filters.year ? Number(filters.year) || thisYear : thisYear);
     const years = Array.from({ length: thisYear - start + 1 }, (_, i) => String(start + i));
     const base = applyFilters(rows, filters, "year");
-    return { empty: base.length === 0, buckets: bucketize(base, (r) => (r.hireYear >= start ? String(r.hireYear) : null), years) };
+    return { empty: base.length === 0, start, thisYear, buckets: bucketize(base, (r) => (r.hireYear >= start ? String(r.hireYear) : null), years) };
   }, [rows, filters]);
   // Boş vəziyyət yalnız filtrə uyğun heç kim olmadıqda; pəncərədə qəbul yoxdursa xətt 0-da çəkilir
   const { empty, buckets: data } = chart;
+  const hired = data.reduce((s, b) => s + b.count, 0);
 
   return (
-    <ChartCard title="İşə qəbul dinamikası" description="Hazırda işləyən əməkdaşların işə qəbul ili · ilə klik edin" className="lg:col-span-2" contentClassName="h-64">
+    <ChartCard
+      title="İşə qəbul dinamikası"
+      description="Hazırda işləyən əməkdaşların işə qəbul ili · ilə klik edin"
+      className={className}
+      contentClassName="h-64"
+      badge={
+        <Chip tone="primary">
+          {chart.start}–{chart.thisYear}: {formatNumber(hired)} qəbul
+        </Chip>
+      }
+    >
       {empty ? (
         <ChartEmpty />
       ) : (
@@ -141,13 +176,26 @@ export function HiresChart({ rows }: { rows: DashboardRow[] }) {
 //  Cins üzrə bölgü → gender
 // ----------------------------------------------------------------------------
 
-export function GenderChart({ rows }: { rows: DashboardRow[] }) {
+export function GenderChart({ rows, className }: { rows: DashboardRow[]; className?: string }) {
   const { filters, toggle } = useDashboardFilters();
   const data = useMemo(() => bucketize(applyFilters(rows, filters, "gender"), (r) => r.gender, GENDERS), [rows, filters]);
   const total = new Set(applyFilters(rows, filters, "gender").map((r) => r.personId)).size;
+  const share = (g: string) => `${formatNumber((data.find((d) => d.key === g)?.share ?? 0) * 100)}%`;
 
   return (
-    <ChartCard title="Cins üzrə bölgü" description="Əməkdaşlar · dilimə və ya leqendə klik edin" contentClassName="h-64">
+    <ChartCard
+      title="Cins üzrə bölgü"
+      description="Əməkdaşlar · dilimə və ya leqendə klik edin"
+      className={className}
+      contentClassName="h-64"
+      badge={
+        total > 0 && (
+          <Chip>
+            Qadın {share("Qadın")} | Kişi {share("Kişi")}
+          </Chip>
+        )
+      }
+    >
       {total === 0 ? (
         <ChartEmpty />
       ) : (
@@ -208,31 +256,55 @@ export function GenderChart({ rows }: { rows: DashboardRow[] }) {
 //  Heyət kateqoriyaları → category
 // ----------------------------------------------------------------------------
 
-export function CategoryChart({ rows }: { rows: DashboardRow[] }) {
+export function CategoryChart({ rows, className }: { rows: DashboardRow[]; className?: string }) {
   const { filters, toggle } = useDashboardFilters();
-  const data = useMemo(() => bucketize(applyFilters(rows, filters, "category"), (r) => r.category, CATEGORIES), [rows, filters]);
+  const base = useMemo(() => applyFilters(rows, filters, "category"), [rows, filters]);
+  const data = useMemo(() => bucketize(base, (r) => r.category, CATEGORIES), [base]);
   const empty = data.every((d) => d.count === 0);
+  const academic = data.find((d) => d.key === ACADEMIC_CATEGORY);
 
   return (
-    <ChartCard title="Heyət kateqoriyaları" description="Vəzifənin heyət kateqoriyası · sətrə klik edin" contentClassName="h-64">
+    <ChartCard
+      title="Heyət kateqoriyaları"
+      description="Vəzifənin heyət kateqoriyası · sətrə klik edin"
+      className={className}
+      contentClassName="h-72"
+      badge={<Chip>{formatNumber(new Set(base.map((r) => r.personId)).size)} nəfər</Chip>}
+    >
       {empty ? (
         <ChartEmpty />
       ) : (
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} layout="vertical" margin={{ left: 8, right: 36 }}>
-            <CartesianGrid stroke="var(--border)" horizontal={false} />
-            <XAxis type="number" allowDecimals={false} {...axis} />
-            <YAxis type="category" dataKey="label" width={118} {...axis} />
-            <Tooltip content={<BucketTooltip />} cursor={{ fill: "var(--muted)", opacity: 0.6 }} />
-            <Bar dataKey="count" radius={[0, 4, 4, 0]} barSize={20} cursor="pointer" onClick={(_, i) => toggle("category", data[i]!.key)} isAnimationActive={false}>
-              {data.map((d, i) => (
-                <Cell key={d.key} fill={`var(--chart-${(i % 5) + 1})`} fillOpacity={opacityFor(filters.category, d.key)} />
-              ))}
-              {/* 0 dəyərlər də etiketlənir */}
-              <LabelList dataKey="count" position="right" fontSize={11} fill="var(--foreground)" />
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
+        <div className="flex h-full flex-col">
+          <div className="min-h-0 flex-1">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={data} layout="vertical" margin={{ left: 0, right: 36 }}>
+                <CartesianGrid stroke="var(--border)" horizontal={false} />
+                <XAxis type="number" allowDecimals={false} {...axis} />
+                <YAxis type="category" dataKey="label" width={118} {...axis} />
+                <Tooltip content={<BucketTooltip />} cursor={{ fill: "var(--muted)", opacity: 0.6 }} />
+                <Bar dataKey="count" radius={[0, 4, 4, 0]} barSize={20} cursor="pointer" onClick={(_, i) => toggle("category", data[i]!.key)} isAnimationActive={false}>
+                  {data.map((d, i) => (
+                    <Cell key={d.key} fill={`var(--chart-${(i % 5) + 1})`} fillOpacity={opacityFor(filters.category, d.key)} />
+                  ))}
+                  {/* 0 dəyərlər də etiketlənir */}
+                  <LabelList dataKey="count" position="right" fontSize={11} fill="var(--foreground)" />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          {academic && (
+            <div className="mt-3 grid grid-cols-2 gap-2 border-t pt-3 text-xs">
+              <div className="flex items-center justify-between rounded-lg bg-muted/60 px-2 py-1">
+                <span className="text-muted-foreground">PMH payı</span>
+                <span className="font-bold text-primary tabular-nums">{pct(academic.share)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-muted/60 px-2 py-1">
+                <span className="text-muted-foreground">ƏH fondunda</span>
+                <span className="font-bold text-success tabular-nums">{pct(academic.grossShare)}</span>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </ChartCard>
   );
@@ -242,7 +314,7 @@ export function CategoryChart({ rows }: { rows: DashboardRow[] }) {
 //  Struktur üzrə bölgü (drill-down) → department
 // ----------------------------------------------------------------------------
 
-export function StructureChart({ rows, departments }: { rows: DashboardRow[]; departments: DepartmentOption[] }) {
+export function StructureChart({ rows, departments, className }: { rows: DashboardRow[]; departments: DepartmentOption[]; className?: string }) {
   const { filters, set } = useDashboardFilters();
   const byId = useMemo(() => new Map(departments.map((d) => [d.id, d])), [departments]);
   const childrenOf = useMemo(() => {
@@ -290,7 +362,9 @@ export function StructureChart({ rows, departments }: { rows: DashboardRow[]; de
     <ChartCard
       title="Struktur üzrə bölgü"
       description="Bölməyə klik — alt bölmələrə enmək və filtr"
+      className={className}
       contentClassName="min-h-64"
+      badge={<Chip>{data.length} bölmə</Chip>}
       header={
         <nav aria-label="Struktur səviyyəsi" className="mt-2 flex flex-wrap items-center gap-1 text-xs">
           <button type="button" onClick={() => set("department", undefined)} className={cn("rounded px-1.5 py-0.5 hover:bg-muted", trail.length === 0 ? "font-medium text-foreground" : "text-primary")}>

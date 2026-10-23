@@ -140,9 +140,9 @@ const DEFAULT_HIDDEN: VisibilityState = { birthDate: false, fin: false, phone: f
 const FACETS = ["department", "staffCategory", "status", "degree"] as const;
 const FACET_LABEL: Record<(typeof FACETS)[number], string> = { department: "Bölmə", staffCategory: "Heyət", status: "Status", degree: "Elmi dərəcə" };
 
-export function EmployeeGrid({ rows, canAdd = false }: { rows: EmployeeRow[]; canAdd?: boolean }) {
+export function EmployeeGrid({ rows, canAdd = false, initialQuery = "" }: { rows: EmployeeRow[]; canAdd?: boolean; initialQuery?: string }) {
   const router = useRouter();
-  const [globalFilter, setGlobalFilter] = useState("");
+  const [globalFilter, setGlobalFilter] = useState(initialQuery);
   const [sorting, setSorting] = useState<SortingState>([{ id: "fullName", desc: false }]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(DEFAULT_HIDDEN);

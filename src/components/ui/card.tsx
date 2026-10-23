@@ -2,7 +2,7 @@ import type * as React from "react";
 import { cn } from "@/lib/utils";
 
 export function Card({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="card" className={cn("rounded-xl border bg-card text-card-foreground shadow-xs", className)} {...props} />;
+  return <div data-slot="card" className={cn("rounded-2xl border bg-card text-card-foreground shadow-xs", className)} {...props} />;
 }
 
 export function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
@@ -10,7 +10,7 @@ export function CardHeader({ className, ...props }: React.ComponentProps<"div">)
 }
 
 export function CardTitle({ className, ...props }: React.ComponentProps<"h3">) {
-  return <h3 className={cn("text-sm font-semibold tracking-tight", className)} {...props} />;
+  return <h3 className={cn("text-sm font-bold tracking-tight", className)} {...props} />;
 }
 
 export function CardDescription({ className, ...props }: React.ComponentProps<"p">) {

@@ -24,7 +24,7 @@ export function EmployeeTable({ rows }: { rows: DashboardRow[] }) {
   const query = filtersToQuery(filters);
 
   return (
-    <Card className="mt-4 overflow-hidden">
+    <Card className="overflow-hidden">
       <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 border-b pb-4">
         <div>
           <CardTitle>Əməkdaşlar</CardTitle>

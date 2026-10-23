@@ -13,10 +13,11 @@ export type Permission =
   | "import"
   | "reports"
   | "users.manage"
-  | "audit.view";
+  | "audit.view"
+  | "database.manage"; // backup, bərpa, bütün məlumatların silinməsi
 
 const GRANTS: Record<UserRole, Permission[]> = {
-  ROOT: ["employees.view", "employees.edit", "import", "reports", "users.manage", "audit.view"],
+  ROOT: ["employees.view", "employees.edit", "import", "reports", "users.manage", "audit.view", "database.manage"],
   HR: ["employees.view", "employees.edit", "import", "reports"],
   DEPT_HEAD: ["employees.view", "reports"],
 };

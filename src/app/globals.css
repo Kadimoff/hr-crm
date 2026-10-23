@@ -33,8 +33,12 @@
   --danger: #dc2626;
   --danger-soft: #fef2f2;
 
-  --sidebar: #ffffff;
-  --sidebar-border: #e2e8f0;
+  /* Sidebar hər iki temada tünddür */
+  --sidebar: #0f172a;
+  --sidebar-foreground: #cbd5e1;
+  --sidebar-muted: #94a3b8;
+  --sidebar-accent: #1e293b;
+  --sidebar-border: #1e293b;
 
   --chart-1: #2563eb;
   --chart-2: #059669;
@@ -44,7 +48,7 @@
 }
 
 .dark {
-  --background: #0a0f1d;
+  --background: #020617;
   --foreground: #e2e8f0;
   --card: #0f172a;
   --card-foreground: #e2e8f0;
@@ -71,6 +75,9 @@
   --danger-soft: rgb(220 38 38 / 0.16);
 
   --sidebar: #0b1222;
+  --sidebar-foreground: #cbd5e1;
+  --sidebar-muted: #94a3b8;
+  --sidebar-accent: #1e293b;
   --sidebar-border: #1e293b;
 
   --chart-1: #3b82f6;
@@ -108,6 +115,9 @@
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
   --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-border: var(--sidebar-border);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);

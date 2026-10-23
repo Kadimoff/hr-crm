@@ -11,11 +11,12 @@ import { getEmployeeRows } from "@/lib/queries";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Əməkdaşlar" };
 
-export default async function EmployeesPage({ searchParams }: { searchParams: Promise<{ archived?: string }> }) {
+export default async function EmployeesPage({ searchParams }: { searchParams: Promise<{ archived?: string; q?: string }> }) {
   const user = await requireUser("employees.view");
   const canEdit = can(user.role, "employees.edit");
   // Arxivi yalnız redaktə hüququ olanlar görür
-  const archived = canEdit && (await searchParams).archived === "1";
+  const params = await searchParams;
+  const archived = canEdit && params.archived === "1";
   const rows = await getEmployeeRows(await departmentScope(user), { archived });
   const scopeNote = user.role === "DEPT_HEAD" ? ` · ${user.departmentName ?? "bölmə təyin edilməyib"} və alt bölmələri` : "";
 
@@ -49,7 +50,8 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
           )
         }
       />
-      <EmployeeGrid rows={rows} canAdd={canEdit && !archived} />
+      {/* key: topbar-dan yeni axtarış gələndə cədvəl yenidən qurulur */}
+      <EmployeeGrid key={params.q ?? ""} rows={rows} canAdd={canEdit && !archived} initialQuery={params.q?.slice(0, 100) ?? ""} />
     </>
   );
 }

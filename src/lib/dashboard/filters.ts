@@ -116,29 +116,53 @@ export const hasFilters = (f: Filters) => FILTER_KEYS.some((k) => !!f[k]);
 
 export interface Kpis {
   headcount: number;
+  /** Aktiv müqavilələr (əvəzçilik daxil) */
+  contracts: number;
+  /** Birdən çox müqaviləsi olan şəxslər */
+  multiContract: number;
   filledUnits: number;
   totalUnits: number;
   fillRate: number | null;
   academicRatio: number | null;
+  academic: number;
+  administrative: number;
+  teachingSupport: number;
+  /** Professor-müəllim heyətində elmi dərəcəlilər */
+  doctorsOfScience: number;
+  doctorsOfPhilosophy: number;
+  degreeRatio: number | null;
   payrollGross: number;
   payrollNet: number;
   payrollEmployerCost: number;
   activeLeaves: number;
 }
 
+const people = (rows: DashboardRow[]) => new Set(rows.map((r) => r.personId)).size;
+
 export function computeKpis(rows: DashboardRow[], staffing: StaffingRow[]): Kpis {
   const totalUnits = staffing.reduce((s, x) => s + x.units, 0);
   const filledUnits = rows.reduce((s, r) => s + r.unitShare, 0);
+  const academic = rows.filter((r) => r.category === ACADEMIC_CATEGORY);
+  const perPerson = new Map<string, number>();
+  for (const r of rows) perPerson.set(r.personId, (perPerson.get(r.personId) ?? 0) + 1);
   return {
-    headcount: new Set(rows.map((r) => r.personId)).size,
+    headcount: perPerson.size,
+    contracts: rows.length,
+    multiContract: [...perPerson.values()].filter((n) => n > 1).length,
     filledUnits,
     totalUnits,
     fillRate: totalUnits > 0 ? filledUnits / totalUnits : null,
-    academicRatio: rows.length ? rows.filter((r) => r.category === ACADEMIC_CATEGORY).length / rows.length : null,
+    academicRatio: rows.length ? academic.length / rows.length : null,
+    academic: people(academic),
+    administrative: people(rows.filter((r) => r.category === "İnzibati")),
+    teachingSupport: people(rows.filter((r) => r.category === "Tədris-köməkçi")),
+    doctorsOfScience: people(academic.filter((r) => r.degree === "Elmlər doktoru")),
+    doctorsOfPhilosophy: people(academic.filter((r) => r.degree === "Fəlsəfə doktoru")),
+    degreeRatio: academic.length ? academic.filter((r) => r.degree !== "Elmi dərəcəsiz").length / academic.length : null,
     payrollGross: rows.reduce((s, r) => s + r.gross, 0),
     payrollNet: rows.reduce((s, r) => s + r.net, 0),
     payrollEmployerCost: rows.reduce((s, r) => s + r.employerCost, 0),
-    activeLeaves: new Set(rows.filter((r) => r.onLeave).map((r) => r.personId)).size,
+    activeLeaves: people(rows.filter((r) => r.onLeave)),
   };
 }
 

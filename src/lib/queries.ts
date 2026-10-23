@@ -47,6 +47,30 @@ export async function getRecentImports() {
 
 export type RecentImport = Awaited<ReturnType<typeof getRecentImports>>[number];
 
+/** Sidebar xülasəsi: son idxal və ştat doluluğu (scope — şöbə rəhbəri üçün bölmə id-ləri) */
+export async function getSidebarSummary(scope: string[] | null) {
+  const [last, filled, staffing] = await Promise.all([
+    prisma.importBatch.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true, status: true } }),
+    prisma.employment.aggregate({
+      where: { status: { not: "TERMINATED" }, person: { deletedAt: null }, ...(scope ? { departmentId: { in: scope } } : {}) },
+      _sum: { unitShare: true },
+    }),
+    // Hər (bölmə, vəzifə) üçün ən son dövrün ştat vahidi — idarə panelindəki kimi
+    prisma.$queryRaw<{ departmentId: string; unitCount: number }[]>`
+      SELECT DISTINCT ON (s."departmentId", s."positionId") s."departmentId", s."unitCount"::float8 AS "unitCount"
+      FROM "StaffingUnit" s
+      ORDER BY s."departmentId", s."positionId", s."periodDate" DESC`,
+  ]);
+  const totalUnits = staffing.filter((s) => !scope || scope.includes(s.departmentId)).reduce((sum, s) => sum + s.unitCount, 0);
+  return {
+    lastImport: last ? { createdAt: last.createdAt.toISOString(), status: last.status } : null,
+    filledUnits: Number(filled._sum.unitShare ?? 0),
+    totalUnits,
+  };
+}
+
+export type SidebarSummary = Awaited<ReturnType<typeof getSidebarSummary>>;
+
 // ----------------------------------------------------------------------------
 //  Əməkdaşlar siyahısı
 // ----------------------------------------------------------------------------
