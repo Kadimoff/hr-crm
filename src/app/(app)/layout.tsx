@@ -12,7 +12,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <Sidebar role={user.role} summary={summary} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar user={user} summary={summary} />
-        <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 lg:px-6">{children}</main>
+        <main className="w-full flex-1 px-4 py-6 lg:px-6">{children}</main>
       </div>
     </div>
   );

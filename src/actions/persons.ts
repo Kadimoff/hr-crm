@@ -277,3 +277,79 @@ export async function restorePersonAction(id: string): Promise<{ error?: string 
   revalidatePath(`/employees/${id}`);
   return {};
 }
+
+// ----------------------------------------------------------------------------
+//  Struktur xəritəsindən sürətli redaktə: əlaqə + bir müqavilənin əsas sahələri
+// ----------------------------------------------------------------------------
+
+export interface QuickEditState {
+  ok?: boolean;
+  error?: string;
+  fieldErrors?: Record<string, string>;
+}
+
+const quickSchema = z.object({
+  personId: z.string().min(1),
+  employmentId: z.string().min(1),
+  mobilePhone: optStr,
+  workPhone: optStr,
+  email: optEmail,
+  departmentId: reqStr("Struktur bölmə"),
+  positionId: reqStr("Vəzifə"),
+  baseSalary: z.preprocess(blank, z.coerce.number({ required_error: "Okladı daxil edin", invalid_type_error: "Rəqəm daxil edin" }).min(0, "Mənfi ola bilməz").max(1_000_000)),
+  unitShare: z.preprocess(blank, z.coerce.number({ required_error: "Ştat payını daxil edin", invalid_type_error: "Rəqəm daxil edin" }).gt(0, "0-dan böyük olmalıdır").max(2)),
+  // İşdən azad etmə tarix və maddə tələb etdiyi üçün yalnız tam formada
+  status: z.enum(["ACTIVE", "ON_LEAVE"], { errorMap: () => ({ message: "Statusu seçin" }) }),
+});
+
+export async function quickUpdatePersonAction(_prev: QuickEditState, form: FormData): Promise<QuickEditState> {
+  const user = await assertUser("employees.edit");
+  const parsed = quickSchema.safeParse(Object.fromEntries(form));
+  if (!parsed.success) {
+    const fieldErrors: Record<string, string> = {};
+    for (const i of parsed.error.issues) fieldErrors[String(i.path[0])] ??= i.message;
+    return { error: "Formada xətalar var", fieldErrors };
+  }
+  const v = parsed.data;
+  try {
+    await prisma.$transaction(async (tx) => {
+      const person = await tx.person.findFirst({ where: { id: v.personId, deletedAt: null }, select: { fullName: true, mobilePhone: true, workPhone: true, email: true } });
+      const emp = await tx.employment.findFirst({ where: { id: v.employmentId, personId: v.personId, status: { not: "TERMINATED" } } });
+      if (!person || !emp) throw new Error("Əməkdaş və ya müqavilə tapılmadı");
+
+      const personData = { mobilePhone: v.mobilePhone ?? null, workPhone: v.workPhone ?? null, email: v.email ?? null };
+      const empData = { departmentId: v.departmentId, positionId: v.positionId, baseSalary: v.baseSalary, unitShare: v.unitShare, status: v.status };
+      const changes: Record<string, [unknown, unknown]> = diff({ mobilePhone: person.mobilePhone, workPhone: person.workPhone, email: person.email }, personData);
+      for (const [k, pair] of Object.entries(diff(Object.fromEntries(Object.keys(empData).map((k) => [k, emp[k as keyof typeof emp]])), empData))) changes[`employment.${k}`] = pair;
+      if (Object.keys(changes).length === 0) return;
+
+      await tx.person.update({ where: { id: v.personId }, data: { ...personData, updatedById: user.id } });
+      await tx.employment.update({ where: { id: emp.id }, data: empData });
+      // Oklad dəyişibsə — temporal tarixçə (tam formadakı qayda ilə eyni)
+      if (Number(emp.baseSalary) !== v.baseSalary) {
+        const today = todayUtc();
+        await tx.salaryRecord.updateMany({ where: { employmentId: emp.id, validTo: null }, data: { validTo: new Date(today.getTime() - 86_400_000) } });
+        await tx.salaryRecord.create({ data: { employmentId: emp.id, baseSalary: v.baseSalary, validFrom: today } });
+      }
+      await audit(
+        {
+          user,
+          action: "UPDATE",
+          entity: "Person",
+          entityId: v.personId,
+          summary: `Struktur xəritəsindən redaktə: ${person.fullName} (${Object.keys(changes).length} sahə)`,
+          changes: changes as Prisma.InputJsonValue,
+        },
+        tx,
+      );
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return { error: "Bu şəxs üçün eyni bölmə, vəzifə və tarixlə müqavilə artıq mövcuddur" };
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") return { error: "Seçilmiş bölmə və ya vəzifə mövcud deyil" };
+    return { error: e instanceof Error ? e.message : "Yadda saxlamaq alınmadı" };
+  }
+  revalidatePath("/org-chart");
+  revalidatePath("/employees");
+  revalidatePath(`/employees/${v.personId}`);
+  return { ok: true };
+}

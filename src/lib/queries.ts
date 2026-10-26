@@ -232,6 +232,7 @@ export interface OrgNode {
   isFaculty: boolean;
   isChair: boolean;
   closed: boolean;
+  createdOn: string; // YYYY-MM-DD
   units: number;
   filled: number;
   headcount: number;
@@ -255,6 +256,7 @@ export async function getOrgTree(): Promise<OrgNode[]> {
       isFaculty: d.isFaculty,
       isChair: d.isChair,
       closed: !!d.closedOn && d.closedOn <= today,
+      createdOn: d.createdOn.toISOString().slice(0, 10),
       units: 0,
       filled: 0,
       headcount: 0,
@@ -290,6 +292,86 @@ export async function getOrgTree(): Promise<OrgNode[]> {
     return n;
   };
   return roots.map(roll);
+}
+
+/** Struktur xəritəsində bölmələrin heyəti — hər aktiv müqavilə bir kart */
+export interface OrgStaff {
+  employmentId: string;
+  personId: string;
+  code: string;
+  fullName: string;
+  gender: "MALE" | "FEMALE";
+  departmentId: string;
+  positionId: string;
+  position: string;
+  category: string;
+  degree: string | null;
+  title: string | null;
+  hireDate: string;
+  baseSalary: number;
+  unitShare: number;
+  isPrimary: boolean;
+  status: "ACTIVE" | "ON_LEAVE";
+  mobilePhone: string | null;
+  workPhone: string | null;
+  email: string | null;
+}
+
+/** scope — şöbə rəhbəri üçün bölmə id-ləri (null = bütün təşkilat) */
+export async function getOrgStaff(scope: string[] | null): Promise<OrgStaff[]> {
+  const rows = await prisma.employment.findMany({
+    where: { status: { not: "TERMINATED" }, person: { deletedAt: null }, ...(scope ? { departmentId: { in: scope } } : {}) },
+    orderBy: { person: { fullName: "asc" } },
+    select: {
+      id: true,
+      departmentId: true,
+      positionId: true,
+      hireDate: true,
+      baseSalary: true,
+      unitShare: true,
+      isPrimary: true,
+      status: true,
+      position: { select: { name: true, staffCategory: true } },
+      person: {
+        select: {
+          id: true,
+          code: true,
+          fullName: true,
+          gender: true,
+          mobilePhone: true,
+          workPhone: true,
+          email: true,
+          academicDegrees: { select: { degree: true } },
+          academicTitles: { select: { title: true } },
+        },
+      },
+    },
+  });
+  return rows.map((e) => {
+    const degrees = e.person.academicDegrees.map((d) => d.degree);
+    const titles = e.person.academicTitles.map((t) => t.title);
+    return {
+      employmentId: e.id,
+      personId: e.person.id,
+      code: e.person.code,
+      fullName: e.person.fullName,
+      gender: e.person.gender,
+      departmentId: e.departmentId,
+      positionId: e.positionId,
+      position: e.position.name,
+      category: STAFF_CATEGORY_LABELS[e.position.staffCategory],
+      degree: degrees.includes("DSC") ? "Elmlər doktoru" : degrees.includes("PHD") ? "Fəlsəfə doktoru" : null,
+      title: titles.includes("PROFESSOR") ? "Professor" : titles.includes("DOCENT") ? "Dosent" : null,
+      hireDate: e.hireDate.toISOString(),
+      baseSalary: Number(e.baseSalary),
+      unitShare: Number(e.unitShare),
+      isPrimary: e.isPrimary,
+      status: e.status === "ON_LEAVE" ? "ON_LEAVE" : "ACTIVE",
+      mobilePhone: e.person.mobilePhone,
+      workPhone: e.person.workPhone,
+      email: e.person.email,
+    };
+  });
 }
 
 // ----------------------------------------------------------------------------
