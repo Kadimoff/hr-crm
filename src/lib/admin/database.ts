@@ -130,6 +130,21 @@ export function backupPath(name: string): string | null {
   return BACKUP_NAME.test(name) ? path.join(BACKUP_DIR, name) : null;
 }
 
+/** Başqa kompüterdən gətirilmiş backup faylını yoxlayıb backup-lar siyahısına əlavə edir */
+export async function importBackup(raw: Buffer): Promise<BackupInfo> {
+  let file: BackupFile;
+  try {
+    file = JSON.parse(gunzipSync(raw).toString("utf8")) as BackupFile;
+  } catch {
+    throw new Error("Fayl backup deyil (.json.gz açılmadı)");
+  }
+  if (file.version !== 1 || typeof file.tables !== "object" || !file.tables) throw new Error("Backup faylının formatı tanınmadı");
+  await mkdir(BACKUP_DIR, { recursive: true });
+  const name = `backup-${stamp()}-upload.json.gz`;
+  await writeFile(path.join(BACKUP_DIR, name), raw);
+  return { name, size: raw.length, createdAt: new Date().toISOString() };
+}
+
 export async function readBackup(name: string): Promise<Buffer | null> {
   const p = backupPath(name);
   return p ? readFile(p).catch(() => null) : null;

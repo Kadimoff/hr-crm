@@ -1,10 +1,10 @@
 "use client";
 
-import { ArchiveRestoreIcon, DatabaseBackupIcon, DownloadIcon, HardDriveIcon, LoaderIcon, Trash2Icon, TriangleAlertIcon } from "lucide-react";
+import { ArchiveRestoreIcon, DatabaseBackupIcon, DownloadIcon, HardDriveIcon, LoaderIcon, Trash2Icon, TriangleAlertIcon, UploadIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { startTransition, useActionState, useEffect, useState, useTransition } from "react";
+import { startTransition, useActionState, useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { createBackupAction, deleteBackupAction, restoreBackupAction, wipeDatabaseAction, type DbActionState } from "@/actions/database";
+import { createBackupAction, deleteBackupAction, uploadBackupAction, restoreBackupAction, wipeDatabaseAction, type DbActionState } from "@/actions/database";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -109,6 +109,7 @@ function DangerDialog({
 export function DatabaseAdmin({ counts, backups }: { counts: Record<string, number>; backups: BackupInfo[] }) {
   const router = useRouter();
   const [busy, startBusy] = useTransition();
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const run = (fn: () => Promise<DbActionState>) =>
     startBusy(async () => {
@@ -147,9 +148,29 @@ export function DatabaseAdmin({ counts, backups }: { counts: Record<string, numb
               Bütün cədvəllərin (istifadəçilər və audit jurnalı daxil) snapshot-u serverdə <code className="font-mono">storage/backups</code> qovluğunda saxlanılır
             </CardDescription>
           </div>
-          <Button onClick={() => run(createBackupAction)} disabled={busy}>
-            {busy ? <LoaderIcon className="animate-spin" /> : <DatabaseBackupIcon />} Backup al
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {/* Başqa kompüterdən yüklənmiş backup — sonra "Bərpa et" ilə tətbiq olunur */}
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".gz,application/gzip"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (!f) return;
+                const data = new FormData();
+                data.set("file", f);
+                run(() => uploadBackupAction(data));
+              }}
+            />
+            <Button variant="outline" onClick={() => fileRef.current?.click()} disabled={busy}>
+              <UploadIcon /> Fayldan yüklə
+            </Button>
+            <Button onClick={() => run(createBackupAction)} disabled={busy}>
+              {busy ? <LoaderIcon className="animate-spin" /> : <DatabaseBackupIcon />} Backup al
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {backups.length === 0 ? (
@@ -169,6 +190,7 @@ export function DatabaseAdmin({ counts, backups }: { counts: Record<string, numb
                     <div className="text-[11px] text-muted-foreground tabular-nums">
                       {formatDateTime(b.createdAt)} · {size(b.size)}
                       {b.name.endsWith("-auto.json.gz") && " · avtomatik (silmə/bərpadan əvvəl)"}
+                      {b.name.endsWith("-upload.json.gz") && " · fayldan yüklənib"}
                     </div>
                   </div>
                   <div className="flex items-center gap-1">

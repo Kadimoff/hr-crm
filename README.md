@@ -4,20 +4,42 @@ Ali təhsil və çoxpilləli korporativ müəssisələr üçün (AR Əmək Məc�
 
 **Stek:** Next.js 15 (App Router, Server Actions, React 19) · TypeScript strict · Tailwind CSS v4 · Radix (shadcn üslubu) · TanStack Table v8 + Virtual · Framer Motion · Recharts · Prisma 6 + PostgreSQL 16 · Redis + BullMQ · ExcelJS (axın rejimi) · Zod
 
-## İşə salma
+## İşə salma (yeni kompüterdə)
+
+Lazımdır: **Git**, **Docker** (Compose v2 ilə) və **Node.js 20+**.
 
 ```bash
-cp .env.example .env
-docker compose up -d          # PostgreSQL :5433, Redis :6380
-npm install
-npx prisma db push            # sxemi bazaya tətbiq edir
-npm run dev                   # http://localhost:3000
-npm run worker                # ayrı terminalda — idxal worker-i (BullMQ)
-npm test                      # validasiya və hesablama testləri
+git clone git@github.com:Kadimoff/hr-crm.git   # və ya https://github.com/Kadimoff/hr-crm.git
+cd hr-crm
+npm run setup        # .env, PostgreSQL + Redis, paketlər, sxem, demo məlumat — hamısı bir əmrlə
+npm run dev          # http://localhost:3000
+npm run worker       # ayrı terminalda — Excel idxalı worker-i (BullMQ)
 ```
 
-> Host-da Node işləmirsə (məs. kitabxana uyğunsuzluğu), eyni əmrləri konteynerdə icra edin:
-> `docker run --rm -it --network host -v "$PWD":/app -w /app node:22-alpine npm run dev`
+İlk açılışda **/setup** səhifəsində ROOT istifadəçi yaradılır. Demo məlumat (640 şəxs, 24 bölmə) yalnız baza boş olduqda yazılır.
+
+Digər əmrlər:
+
+| Əmr | Nə edir |
+| --- | --- |
+| `npm run dev:lan` | Lokal şəbəkədən `http://<IP>:3000` ilə giriş — IP-ni `.env`-də `DEV_ORIGINS`-ə yazın |
+| `npm test` | Validasiya və hesablama testləri |
+| `npm run typecheck` | TypeScript yoxlaması |
+| `npm run db:studio` | Bazaya Prisma Studio ilə baxış |
+
+> Portlar başqa layihə ilə toqquşursa (5433, 6380), `docker-compose.override.yml` yaradıb portu dəyişin
+> və `.env`-dəki `DATABASE_URL` / `REDIS_URL`-i uyğunlaşdırın. Bu fayl git-ə düşmür.
+
+### Başqa kompüterə köçürmə (məlumatlar olduğu kimi)
+
+Kod GitHub-dan gəlir, məlumatlar isə backup faylı ilə köçürülür (fayl repo-ya **qoyulmur** — şəxsi məlumat və şifrə hash-ları var):
+
+1. Köhnə kompüterdə: **Verilənlər bazası → Backup al**, sonra həmin sətirdə **Yüklə** (`backup-….json.gz`).
+2. Yeni kompüterdə `npm run setup`, `npm run dev`, /setup-da müvəqqəti ROOT yaradın.
+3. **Verilənlər bazası → Fayldan yüklə** ilə faylı seçin, sonra onun sətrində **Bərpa et**.
+4. Bərpadan sonra köhnə kompüterdəki istifadəçi adı və şifrə ilə daxil olun.
+
+Struktur xəritəsinin düzülüşü və görünüşü brauzerdə saxlanılır, köçürülmür.
 
 ## Struktur
 
