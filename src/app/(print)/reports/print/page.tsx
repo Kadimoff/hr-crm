@@ -29,6 +29,7 @@ export default async function PrintReportPage({ searchParams }: { searchParams: 
       <Sheet>
         <header className="flex items-start justify-between gap-6 border-b-2 border-neutral-800 pb-3">
           <div>
+            <img src="/logo.png" alt="ASOİU" width={1000} height={347} className="mb-2 h-[12mm] w-auto" />
             <div className="text-[11px] tracking-wider text-neutral-500 uppercase">
               {ORG_NAME} · {ORG_UNIT}
             </div>

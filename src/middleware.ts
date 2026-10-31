@@ -20,6 +20,6 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   // Fayl yükləmə marşrutları çıxarılıb: middleware sorğu gövdəsini 10 MB-dək bufferləyib kəsir (böyük skanlar, backup).
-  // Onlar girişi özləri yoxlayır (apiUser). api/health — konteynerin girişsiz sağlamlıq yoxlaması.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/health|api/import/upload|api/admin/backups/upload|api/persons/[^/]+/documents).*)"],
+  // Onlar girişi özləri yoxlayır (apiUser). api/health — konteynerin girişsiz sağlamlıq yoxlaması; logo və ikonlar — giriş səhifəsi üçün.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|logo|api/health|api/import/upload|api/admin/backups/upload|api/persons/[^/]+/documents).*)"],
 };

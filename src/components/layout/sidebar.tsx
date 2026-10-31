@@ -4,7 +4,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { UserRole } from "@prisma/client";
 import {
   BriefcaseIcon,
-  Building2Icon,
   ChevronDownIcon,
   CrownIcon,
   DatabaseIcon,
@@ -209,14 +208,10 @@ function SidebarContent({ role, summary, onClose }: { role: UserRole; summary: S
   return (
     <div className="flex h-full flex-col text-sidebar-foreground">
       <div className="flex items-center justify-between border-b border-sidebar-border p-5">
-        <Link href="/dashboard" className="flex items-center gap-3">
-          <div className="flex size-11 items-center justify-center rounded-xl border border-blue-400/30 bg-gradient-to-br from-blue-600 to-indigo-800 text-white shadow-lg shadow-blue-600/30">
-            <Building2Icon className="size-5" />
-          </div>
-          <div>
-            <div className="text-sm leading-tight font-bold text-white">ASOİU HR CRM</div>
-            <div className="mt-0.5 text-[11px] font-medium text-blue-400">Kadr və əməkhaqqı sistemi</div>
-          </div>
+        <Link href="/dashboard" className="flex min-w-0 flex-col gap-2" aria-label="ASOİU HR CRM — İdarə paneli">
+          {/* Tünd fonda logonun ağ versiyası */}
+          <img src="/logo-white.png" alt="ASOİU — Azərbaycan Dövlət Neft və Sənaye Universiteti" width={1000} height={347} className="h-12 w-auto self-start" />
+          <div className="text-[11px] font-medium text-blue-400">HR CRM · Kadr və əməkhaqqı sistemi</div>
         </Link>
         {onClose && (
           <button type="button" onClick={onClose} aria-label="Menyunu bağla" className="p-1 text-sidebar-muted hover:text-white">
