@@ -63,6 +63,15 @@ POSTGRES_PASSWORD='güclü-şifrə' APP_URL='https://hr.example.az' docker compo
 - Image build zamanı typecheck və testlər işləyir — keçməsə yeni versiya yaranmır, işləyən qalır.
 - İlk açılışda `/setup`-da ROOT yaradılır; köhnə məlumatlar **Verilənlər bazası → Fayldan yüklə → Bərpa et** ilə gətirilir.
 
+### Canlı server (Coolify) və avtomatik yenilənmə
+
+Sistem serverdə Coolify layihəsi **HR CRM** → tətbiq **hr-crm** kimi işləyir (Docker Compose, port `6633`): http://169.58.163.254:6633
+
+- **Avtomatik deploy:** serverdəki `hr-crm-autodeploy.timer` hər dəqiqə GitHub-dakı `main` budağını yoxlayır. Yeni commit görəndə **əvvəlcə backup** alır (`npm run backup -- deploy` — baza + sənədlər, Verilənlər bazası səhifəsində görünür), sonra Coolify-da deploy başladır. Push-dan saytda görünənə qədər ~4–7 dəqiqə. Build alınmasa (typecheck/test), işləyən versiya qalır.
+- **Gecə backup-ı:** `hr-crm-backup.timer` hər gün 03:45. Saxlanılır: son 10 deploy və son 14 gecə backup-ı; əl ilə alınanlar silinmir.
+- Yarımçıq işi ayrıca budaqda saxlayın — `main`-ə düşən hər commit canlıya çıxır. Deploy zamanı tətbiq bir neçə saniyə yenidən başlayır.
+- Loqlar: `journalctl -u hr-crm-autodeploy -n 50`, `journalctl -u hr-crm-backup -n 20`.
+
 ## Struktur
 
 | Yol | Məzmun |

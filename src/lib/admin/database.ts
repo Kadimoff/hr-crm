@@ -105,8 +105,17 @@ export interface BackupInfo {
 /** YYYYMMDD-HHmmssSSS — millisaniyə: eyni saniyədəki avtomatik backup-lar bir-birini əvəz etməsin */
 const stamp = (d = new Date()) => d.toISOString().replace(/[-:.]/g, "").replace("T", "-").slice(0, 18);
 
+/**
+ * Backup-ın səbəbi faylın adına yazılır: auto — silmə/bərpadan əvvəl, deploy — yeni versiyadan əvvəl, nightly — gecə.
+ * Əl ilə alınanlarda səbəb yoxdur.
+ */
+export type BackupReason = "auto" | "deploy" | "nightly";
+
+/** Avtomatik backup-ların neçəsi saxlanılır (köhnələr silinir); əl ilə alınanlara toxunulmur */
+const KEEP: Record<"deploy" | "nightly", number> = { deploy: 10, nightly: 14 };
+
 /** Bütün cədvəllər + sənəd faylları → storage/backups/backup-YYYYMMDD-HHmmssSSS[-reason].zip */
-export async function createBackup(createdBy: string, reason?: "auto"): Promise<BackupInfo & { rows: number }> {
+export async function createBackup(createdBy: string, reason?: BackupReason): Promise<BackupInfo & { rows: number }> {
   const { order } = await schemaInfo();
   const tables: Record<string, unknown[]> = {};
   let rows = 0;
@@ -201,6 +210,13 @@ export async function listBackups(): Promise<BackupInfo[]> {
       }),
   );
   return out.sort((a, b) => b.name.localeCompare(a.name));
+}
+
+/** Deploy və gecə backup-larının ən yeniləri saxlanılır; silinənlərin adları qaytarılır */
+export async function pruneBackups(reason: keyof typeof KEEP): Promise<string[]> {
+  const old = (await listBackups()).filter((b) => b.name.endsWith(`-${reason}.zip`)).slice(KEEP[reason]);
+  for (const b of old) await unlink(path.join(BACKUP_DIR, b.name)).catch(() => undefined);
+  return old.map((b) => b.name);
 }
 
 /** Yol keçidinə (../) qarşı: yalnız backup adı formatına uyğun fayllar */

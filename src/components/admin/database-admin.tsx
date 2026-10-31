@@ -196,6 +196,8 @@ export function DatabaseAdmin({ counts, backups }: { counts: Record<string, numb
                     <div className="text-[11px] text-muted-foreground tabular-nums">
                       {formatDateTime(b.createdAt)} · {size(b.size)} · {b.documents === null ? "yalnız baza (köhnə format)" : `baza + ${b.documents} sənəd faylı`}
                       {/-auto\.(zip|json\.gz)$/.test(b.name) && " · avtomatik (silmə/bərpadan əvvəl)"}
+                      {b.name.endsWith("-deploy.zip") && " · yeni versiyanın deploy-undan əvvəl"}
+                      {b.name.endsWith("-nightly.zip") && " · gecə backup-ı"}
                       {/-upload\.(zip|json\.gz)$/.test(b.name) && " · fayldan yüklənib"}
                     </div>
                   </div>

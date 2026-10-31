@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "worker": "tsx --env-file=.env src/workers/import-worker.ts",
+    "backup": "NODE_OPTIONS=--conditions=react-server tsx scripts/backup.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "db:generate": "prisma generate",
