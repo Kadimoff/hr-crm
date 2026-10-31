@@ -12,8 +12,8 @@ export function Topbar({ user, summary }: { user: CurrentUser; summary: SidebarS
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b bg-card/80 px-4 backdrop-blur-md lg:px-6">
       <MobileNav role={user.role} summary={summary} />
-      <Breadcrumbs />
-      <div className="ml-auto flex items-center gap-2">
+      <Breadcrumbs units={summary.units} />
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         {can(user.role, "employees.view") && (
           // Əməkdaşlar siyahısında axtarış (?q=) — JS olmadan da işləyir
           <form action="/employees" role="search" className="relative hidden md:block">
@@ -23,7 +23,7 @@ export function Topbar({ user, summary }: { user: CurrentUser; summary: SidebarS
               type="search"
               placeholder="Əməkdaş, kod, FİN axtar…"
               aria-label="Əməkdaş axtar"
-              className="h-9 w-64 rounded-xl border bg-muted pr-3 pl-8 text-xs placeholder:text-muted-foreground focus:ring-2 focus:ring-ring focus:outline-none"
+              className="h-9 w-48 rounded-xl xl:w-64 border bg-muted pr-3 pl-8 text-xs placeholder:text-muted-foreground focus:ring-2 focus:ring-ring focus:outline-none"
             />
           </form>
         )}

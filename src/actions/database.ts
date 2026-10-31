@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createBackup, deleteBackup, importBackup, restoreBackup, wipeDatabase } from "@/lib/admin/database";
+import { createBackup, deleteBackup, restoreBackup, wipeDatabase } from "@/lib/admin/database";
 import { verifyPassword } from "@/lib/auth/password";
 import { assertUser, AuthError, type CurrentUser } from "@/lib/auth/session";
 import { audit } from "@/lib/audit";
@@ -27,28 +27,13 @@ async function checkPassword(actor: CurrentUser, password: FormDataEntryValue | 
   return user && (await verifyPassword(password, user.passwordHash)) ? null : "Şifrə yanlışdır";
 }
 
-export async function uploadBackupAction(form: FormData): Promise<DbActionState> {
-  try {
-    const actor = await assertUser("database.manage");
-    const file = form.get("file");
-    if (!(file instanceof File) || !file.size) return { error: "Fayl seçilməyib" };
-    if (!file.name.endsWith(".json.gz")) return { error: "Yalnız .json.gz backup faylı qəbul olunur" };
-    const b = await importBackup(Buffer.from(await file.arrayBuffer()));
-    await audit({ user: actor, action: "IMPORT", entity: "Backup", entityId: b.name, summary: `Backup faylı yükləndi: ${file.name} → ${b.name}` });
-    revalidatePath("/admin/database");
-    return { ok: true, message: `Backup yükləndi: ${b.name} — indi "Bərpa et" ilə tətbiq edə bilərsiniz` };
-  } catch (e) {
-    return fail(e);
-  }
-}
-
 export async function createBackupAction(): Promise<DbActionState> {
   try {
     const actor = await assertUser("database.manage");
     const b = await createBackup(actor.username);
-    await audit({ user: actor, action: "EXPORT", entity: "Database", entityId: b.name, summary: `Backup alındı: ${b.name} (${b.rows} sətir)` });
+    await audit({ user: actor, action: "EXPORT", entity: "Database", entityId: b.name, summary: `Backup alındı: ${b.name} (${b.rows} sətir, ${b.documents} sənəd faylı)` });
     revalidatePath("/admin/database");
-    return { ok: true, message: `Backup alındı: ${b.name}` };
+    return { ok: true, message: `Backup alındı: ${b.name} · ${b.documents} sənəd faylı daxil` };
   } catch (e) {
     return fail(e);
   }
@@ -73,7 +58,13 @@ export async function wipeDatabaseAction(_prev: DbActionState, form: FormData): 
     const pwError = await checkPassword(actor, form.get("password"));
     if (pwError) return { error: pwError };
     const r = await wipeDatabase(actor.username);
-    await audit({ user: actor, action: "DELETE", entity: "Database", summary: `Bütün məlumatlar silindi (${r.rows} sətir) · əvvəlcədən backup: ${r.backup}`, changes: { backup: r.backup, rows: r.rows } });
+    await audit({
+      user: actor,
+      action: "DELETE",
+      entity: "Database",
+      summary: `Bütün məlumatlar silindi (${r.rows} sətir, ${r.documents} sənəd faylı) · əvvəlcədən backup: ${r.backup}`,
+      changes: { backup: r.backup, rows: r.rows, documents: r.documents },
+    });
     revalidatePath("/", "layout");
     return { ok: true, message: `Bütün məlumatlar silindi. Əvvəlcədən backup alındı: ${r.backup}` };
   } catch (e) {
@@ -89,7 +80,7 @@ export async function restoreBackupAction(_prev: DbActionState, form: FormData):
     if (pwError) return { error: pwError };
     const r = await restoreBackup(name, actor.username);
     // İstifadəçilər də bərpa olunur — cari istifadəçi backup-da olmaya bilər, ona görə yalnız ad yazılır
-    await audit({ user: null, username: actor.username, action: "RESTORE", entity: "Database", entityId: name, summary: `Backup-dan bərpa: ${name} (${r.rows} sətir) · əvvəlki vəziyyət: ${r.backup}` });
+    await audit({ user: null, username: actor.username, action: "RESTORE", entity: "Database", entityId: name, summary: `Backup-dan bərpa: ${name} (${r.rows} sətir${r.documents === null ? ", köhnə format — sənəd faylları dəyişmədi" : `, ${r.documents} sənəd faylı`}) · əvvəlki vəziyyət: ${r.backup}` });
     revalidatePath("/", "layout");
     return { ok: true, loggedOut: true, message: `Bərpa olundu: ${name}. Yenidən daxil olun.` };
   } catch (e) {

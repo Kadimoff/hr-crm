@@ -30,6 +30,7 @@ export default async function UsersPage() {
           departmentId: u.departmentId,
           departmentName: u.department?.name ?? null,
           isActive: u.isActive,
+          canDeleteDocuments: u.canDeleteDocuments,
           lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
           createdAt: u.createdAt.toISOString(),
           createdBy: u.createdBy?.username ?? null,

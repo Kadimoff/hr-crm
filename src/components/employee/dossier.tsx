@@ -4,6 +4,7 @@ import {
   BriefcaseIcon,
   CalendarClockIcon,
   CalendarIcon,
+  FolderOpenIcon,
   GraduationCapIcon,
   HeartHandshakeIcon,
   IdCardIcon,
@@ -15,6 +16,7 @@ import {
   UserIcon,
 } from "lucide-react";
 import type * as React from "react";
+import { PersonDocuments } from "@/components/employee/documents";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -133,7 +135,10 @@ const daysBetween = (a: Date, b: Date) => Math.round((b.getTime() - a.getTime())
 //  Dosye
 // ----------------------------------------------------------------------------
 
-export function EmployeeDossier({ data }: { data: Dossier }) {
+const TABS = ["personal", "contract", "academic", "family", "leave", "attendance", "documents"];
+
+/** tab — açılışda seçilən bölmə (?tab=documents); canEdit — şəxsi işə sənəd yükləmək; canDelete — sənədi sorğusuz silmək */
+export function EmployeeDossier({ data, canEdit = false, canDelete = false, tab }: { data: Dossier; canEdit?: boolean; canDelete?: boolean; tab?: string }) {
   const { person: p, main, seniority, leave, payroll, carryover } = data;
   const status = main ? STATUS[main.status] : null;
 
@@ -192,7 +197,7 @@ export function EmployeeDossier({ data }: { data: Dossier }) {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="personal">
+      <Tabs defaultValue={tab && TABS.includes(tab) ? tab : "personal"}>
         <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="personal">
             <UserIcon /> Şəxsi
@@ -211,6 +216,10 @@ export function EmployeeDossier({ data }: { data: Dossier }) {
           </TabsTrigger>
           <TabsTrigger value="attendance">
             <CalendarClockIcon /> Davamiyyət
+          </TabsTrigger>
+          <TabsTrigger value="documents">
+            <FolderOpenIcon /> Şəxsi iş
+            {p.documents.length > 0 && <span className="rounded-full bg-primary/10 px-1.5 text-[10px] font-semibold text-primary tabular-nums">{p.documents.length}</span>}
           </TabsTrigger>
         </TabsList>
 
@@ -649,6 +658,28 @@ export function EmployeeDossier({ data }: { data: Dossier }) {
               empty="İştirak etməmə qeydə alınmayıb"
             />
           </Section>
+        </TabsContent>
+
+        {/* ŞƏXSİ İŞ — sənədlər */}
+        <TabsContent value="documents">
+          <PersonDocuments
+            personId={p.id}
+            canEdit={canEdit && !p.deletedAt}
+            canDelete={canDelete}
+            documents={p.documents.map((d) => ({
+              id: d.id,
+              kind: d.kind,
+              title: d.title,
+              number: d.number,
+              documentDate: d.documentDate?.toISOString() ?? null,
+              fileName: d.fileName,
+              extension: d.extension,
+              size: d.size,
+              uploadedBy: d.uploadedBy?.fullName ?? null,
+              createdAt: d.createdAt.toISOString(),
+              pendingDeletion: d.deletionRequests[0] ? { by: d.deletionRequests[0].requestedBy?.fullName ?? null, reason: d.deletionRequests[0].reason } : null,
+            }))}
+          />
         </TabsContent>
       </Tabs>
     </div>

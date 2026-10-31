@@ -6,3 +6,4 @@ storage/uploads/*
 next-env.d.ts
 *.tsbuildinfo
 storage/backups/
+storage/documents*

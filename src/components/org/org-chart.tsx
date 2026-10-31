@@ -35,6 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DateInput } from "@/components/ui/date-input";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -326,6 +327,8 @@ export function OrgChart({
   const [focus, setFocus] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
+  /** Mouse altındakı nəticə — yalnız vurğulanır; xəritə yalnız klaviatura ilə seçiləndə hərəkət edir */
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [offsets, setOffsets] = useState<Record<string, Offset>>({});
   const [deptDialog, setDeptDialog] = useState<DeptDialogState>(null);
@@ -334,6 +337,7 @@ export function OrgChart({
   const [restored, setRestored] = useState(false);
   const [historyLen, setHistoryLen] = useState(0);
   const viewport = useRef<HTMLDivElement>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
   const panDrag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const nodeDrag = useRef<{ key: string; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const history = useRef<ViewSnapshot[]>([]);
@@ -405,6 +409,20 @@ export function OrgChart({
     return () => clearTimeout(t);
   }, [restored, expanded, focus, selected, zoom, pan]);
 
+  // «/» və ya Ctrl+K — istənilən an axtarışa keçid (başqa sahəyə yazarkən yox)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing = e.target instanceof HTMLElement && (e.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName));
+      if ((e.key === "/" && !typing) || (e.key.toLowerCase() === "k" && (e.ctrlKey || e.metaKey))) {
+        e.preventDefault();
+        searchInput.current?.focus();
+        searchInput.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const q = norm(query.trim());
 
   // Axtarış: uyğun bölmələrin və əməkdaşların yolu açılır
@@ -418,7 +436,7 @@ export function OrgChart({
     };
     const results: SearchResult[] = [];
     for (const s of staff) {
-      if (norm(s.fullName).includes(q) || norm(s.code).includes(q)) {
+      if (norm(s.fullName).includes(q) || norm(s.code).includes(q) || norm(s.fin).includes(q)) {
         staffHits.add(s.employmentId);
         openPath(s.departmentId);
         open.add(`staff:${s.departmentId}`);
@@ -437,7 +455,10 @@ export function OrgChart({
 
   const results = search?.results ?? [];
   const active = results[Math.min(activeIdx, results.length - 1)];
-  useEffect(() => setActiveIdx(0), [q]);
+  useEffect(() => {
+    setActiveIdx(0);
+    setHoverIdx(null);
+  }, [q]);
 
   const isOpen = useCallback((key: string) => (search ? search.open.has(key) : expanded.has(key)), [search, expanded]);
 
@@ -655,28 +676,36 @@ export function OrgChart({
         <Button variant="outline" size="sm" onClick={goBack} disabled={historyLen === 0} title="Əvvəlki görünüşə qayıt">
           <Undo2Icon /> Geri
         </Button>
-        <div className="relative w-full sm:w-80">
-          <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+        <div className="relative w-full sm:w-96">
+          <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-primary" />
           <Input
+            ref={searchInput}
+            autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (!results.length) return;
               if (e.key === "ArrowDown") {
                 e.preventDefault();
+                setHoverIdx(null);
                 setActiveIdx((i) => Math.min(results.length - 1, i + 1));
               } else if (e.key === "ArrowUp") {
                 e.preventDefault();
+                setHoverIdx(null);
                 setActiveIdx((i) => Math.max(0, i - 1));
               } else if (e.key === "Enter" && active) {
                 e.preventDefault();
                 pick(active);
               } else if (e.key === "Escape") setQuery("");
             }}
-            placeholder="Əməkdaş və ya bölmə axtar…"
-            className="pr-8 pl-9"
+            placeholder="Əməkdaş (ad, kod, FİN) və ya bölmə axtar…"
+            className="h-10 border-primary/40 pr-8 pl-9 shadow-sm"
             aria-label="Əməkdaş və ya bölmə axtar"
+            aria-keyshortcuts="/ Control+K"
           />
+          {!query && (
+            <kbd className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 rounded border bg-muted px-1.5 font-mono text-[10px] text-muted-foreground sm:block">/</kbd>
+          )}
           {query && (
             <button type="button" onClick={() => setQuery("")} aria-label="Axtarışı təmizlə" className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted">
               <XIcon className="size-3.5" />
@@ -685,10 +714,10 @@ export function OrgChart({
           {search && (
             <SearchResults
               results={results}
-              active={active}
               staff={staff}
               byId={byId}
-              onHover={(i) => setActiveIdx(i)}
+              highlighted={(hoverIdx !== null && results[hoverIdx]) || active}
+              onHover={setHoverIdx}
               onPick={pick}
             />
           )}
@@ -829,20 +858,20 @@ export function OrgChart({
   );
 }
 
-/** Axtarış nəticələri: yazdıqca aktiv nəticə xəritədə göstərilir, klik və ya Enter — seçir */
+/** Axtarış nəticələri: yazdıqca / oxlarla seçilən nəticə xəritədə göstərilir (mouse yalnız vurğulayır), klik və ya Enter — seçir */
 function SearchResults({
   results,
-  active,
+  highlighted,
   staff,
   byId,
   onHover,
   onPick,
 }: {
   results: SearchResult[];
-  active?: SearchResult;
+  highlighted?: SearchResult;
   staff: OrgStaff[];
   byId: Map<string, OrgNode>;
-  onHover: (i: number) => void;
+  onHover: (i: number | null) => void;
   onPick: (r: SearchResult) => void;
 }) {
   const shown = results.slice(0, 12);
@@ -851,11 +880,12 @@ function SearchResults({
       {shown.length === 0 ? (
         <div className="px-3 py-4 text-center text-sm text-muted-foreground">Heç nə tapılmadı</div>
       ) : (
-        <ul className="max-h-80 overflow-y-auto py-1" role="listbox">
+        // overscroll-contain: siyahının sonunda sürüşmə səhifəyə / xəritəyə keçmir
+        <ul className="max-h-80 overflow-y-auto overscroll-contain py-1" role="listbox" onMouseLeave={() => onHover(null)}>
           {shown.map((r, i) => {
             const s = r.type === "staff" ? staff.find((x) => x.employmentId === r.id) : undefined;
             const d = r.type === "dept" ? byId.get(r.id) : s ? byId.get(s.departmentId) : undefined;
-            const isActive = active?.type === r.type && active.id === r.id;
+            const isActive = highlighted?.type === r.type && highlighted.id === r.id;
             return (
               <li key={`${r.type}:${r.id}`} role="option" aria-selected={isActive}>
                 <button
@@ -1204,7 +1234,7 @@ function DeptDialog({ state, tree, onClose, onCreated }: { state: DeptDialogStat
               <Input id="dept-code" name="code" defaultValue={edit?.code ?? suggestCode(parent, tree)} className="font-mono" />
             </FormField>
             <FormField label="Yaradılma tarixi" htmlFor="dept-created" error={fe.createdOn} required>
-              <Input id="dept-created" name="createdOn" type="date" defaultValue={edit?.createdOn ?? new Date().toISOString().slice(0, 10)} />
+              <DateInput id="dept-created" name="createdOn" defaultValue={edit?.createdOn ?? new Date().toISOString().slice(0, 10)} />
             </FormField>
           </div>
           <SelectField name="kind" label="Növü" value={defaultKind} options={KIND_OPTIONS} error={fe.kind} />

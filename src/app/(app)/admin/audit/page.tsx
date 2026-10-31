@@ -29,7 +29,17 @@ const ACTION_LABEL: Record<AuditAction, { label: string; variant: "success" | "w
   PASSWORD_RESET: { label: "Şifrə", variant: "warning" },
 };
 
-const ENTITY_LABEL: Record<string, string> = { Person: "Əməkdaş", User: "İstifadəçi", ImportBatch: "İdxal", Session: "Sessiya", Report: "Hesabat" };
+const ENTITY_LABEL: Record<string, string> = {
+  Person: "Əməkdaş",
+  PersonDocument: "Şəxsi iş sənədi",
+  DocumentDeletionRequest: "Silmə sorğusu",
+  User: "İstifadəçi",
+  ImportBatch: "İdxal",
+  Session: "Sessiya",
+  Report: "Hesabat",
+  Database: "Verilənlər bazası",
+  Backup: "Backup",
+};
 
 interface Search {
   q?: string;

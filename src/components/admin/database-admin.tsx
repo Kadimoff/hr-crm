@@ -4,7 +4,7 @@ import { ArchiveRestoreIcon, DatabaseBackupIcon, DownloadIcon, HardDriveIcon, Lo
 import { useRouter } from "next/navigation";
 import { startTransition, useActionState, useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { createBackupAction, deleteBackupAction, uploadBackupAction, restoreBackupAction, wipeDatabaseAction, type DbActionState } from "@/actions/database";
+import { createBackupAction, deleteBackupAction, restoreBackupAction, wipeDatabaseAction, type DbActionState } from "@/actions/database";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -22,6 +22,7 @@ const COUNT_LABELS: Record<string, string> = {
   imports: "İdxal paketləri",
   users: "İstifadəçilər",
   audits: "Audit qeydləri",
+  documents: "Şəxsi iş sənədləri",
 };
 
 const size = (b: number) => (b < 1024 * 1024 ? `${formatNumber(b / 1024, 1)} KB` : `${formatNumber(b / 1024 / 1024, 1)} MB`);
@@ -145,7 +146,8 @@ export function DatabaseAdmin({ counts, backups }: { counts: Record<string, numb
           <div>
             <CardTitle>Backup-lar</CardTitle>
             <CardDescription className="mt-0.5">
-              Bütün cədvəllərin (istifadəçilər və audit jurnalı daxil) snapshot-u serverdə <code className="font-mono">storage/backups</code> qovluğunda saxlanılır
+              Bütün cədvəllərin (istifadəçilər və audit jurnalı daxil) snapshot-u və şəxsi iş sənədlərinin faylları — bir .zip faylında, serverdə{" "}
+              <code className="font-mono">storage/backups</code> qovluğunda saxlanılır
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -153,15 +155,19 @@ export function DatabaseAdmin({ counts, backups }: { counts: Record<string, numb
             <input
               ref={fileRef}
               type="file"
-              accept=".gz,application/gzip"
+              accept=".zip,.gz,application/zip,application/gzip"
               hidden
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 e.target.value = "";
                 if (!f) return;
-                const data = new FormData();
-                data.set("file", f);
-                run(() => uploadBackupAction(data));
+                // Fayl olduğu kimi göndərilir və serverdə diskə axınla yazılır (sənədli backup GB ola bilər)
+                run(async () => {
+                  const res = await fetch("/api/admin/backups/upload", { method: "POST", headers: { "X-File-Name": encodeURIComponent(f.name) }, body: f });
+                  const body = (await res.json().catch(() => ({}))) as DbActionState;
+                  if (res.ok) router.refresh();
+                  return res.ok ? { ok: true, message: body.message } : { error: body.error ?? "Yükləmə alınmadı" };
+                });
               }}
             />
             <Button variant="outline" onClick={() => fileRef.current?.click()} disabled={busy}>
@@ -188,9 +194,9 @@ export function DatabaseAdmin({ counts, backups }: { counts: Record<string, numb
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-mono text-xs font-semibold">{b.name}</div>
                     <div className="text-[11px] text-muted-foreground tabular-nums">
-                      {formatDateTime(b.createdAt)} · {size(b.size)}
-                      {b.name.endsWith("-auto.json.gz") && " · avtomatik (silmə/bərpadan əvvəl)"}
-                      {b.name.endsWith("-upload.json.gz") && " · fayldan yüklənib"}
+                      {formatDateTime(b.createdAt)} · {size(b.size)} · {b.documents === null ? "yalnız baza (köhnə format)" : `baza + ${b.documents} sənəd faylı`}
+                      {/-auto\.(zip|json\.gz)$/.test(b.name) && " · avtomatik (silmə/bərpadan əvvəl)"}
+                      {/-upload\.(zip|json\.gz)$/.test(b.name) && " · fayldan yüklənib"}
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
@@ -235,8 +241,8 @@ export function DatabaseAdmin({ counts, backups }: { counts: Record<string, numb
           <div>
             <CardTitle className="text-danger">Bütün məlumatları sil</CardTitle>
             <CardDescription className="mt-0.5 max-w-2xl">
-              Fiziki şəxslər, müqavilələr, struktur, vəzifələr, ştat cədvəli, məzuniyyətlər və idxal tarixçəsi silinir. İstifadəçi hesabları və audit jurnalı saxlanılır. Silmədən əvvəl
-              avtomatik backup alınır.
+              Fiziki şəxslər, müqavilələr, struktur, vəzifələr, ştat cədvəli, məzuniyyətlər, idxal tarixçəsi və şəxsi iş sənədləri (fayllar da) silinir. İstifadəçi hesabları və audit
+              jurnalı saxlanılır. Silmədən əvvəl sənədlərlə birlikdə avtomatik backup alınır. Yalnız administrator (root) edə bilər.
             </CardDescription>
           </div>
           <DangerDialog
@@ -249,10 +255,10 @@ export function DatabaseAdmin({ counts, backups }: { counts: Record<string, numb
             description={
               <>
                 <p>
-                  {formatNumber(counts.persons ?? 0)} fiziki şəxs, {formatNumber(counts.employments ?? 0)} müqavilə və {formatNumber(counts.departments ?? 0)} struktur bölməsi daxil olmaqla bütün kadr
-                  məlumatları silinəcək.
+                  {formatNumber(counts.persons ?? 0)} fiziki şəxs, {formatNumber(counts.employments ?? 0)} müqavilə və {formatNumber(counts.departments ?? 0)} struktur bölməsi və{" "}
+                  {formatNumber(counts.documents ?? 0)} şəxsi iş sənədi daxil olmaqla bütün kadr məlumatları silinəcək.
                 </p>
-                <p>Avtomatik backup alınır — lazım olsa, oradan bərpa edə bilərsiniz.</p>
+                <p>Sənəd faylları ilə birlikdə avtomatik backup alınır — lazım olsa, oradan bərpa edə bilərsiniz.</p>
               </>
             }
             action={wipeDatabaseAction}

@@ -19,6 +19,8 @@ export interface CurrentUser {
   role: UserRole;
   departmentId: string | null;
   departmentName: string | null;
+  /** Şəxsi iş sənədlərini sorğusuz silə bilər (root verir) */
+  canDeleteDocuments: boolean;
 }
 
 export async function clientIp(): Promise<string | null> {
@@ -55,11 +57,11 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   if (!token) return null;
   const session = await prisma.session.findUnique({
     where: { id: hashToken(token) },
-    select: { expiresAt: true, user: { select: { id: true, username: true, fullName: true, role: true, isActive: true, departmentId: true, department: { select: { name: true } } } } },
+    select: { expiresAt: true, user: { select: { id: true, username: true, fullName: true, role: true, isActive: true, canDeleteDocuments: true, departmentId: true, department: { select: { name: true } } } } },
   });
   if (!session || session.expiresAt < new Date() || !session.user.isActive) return null;
   const u = session.user;
-  return { id: u.id, username: u.username, fullName: u.fullName, role: u.role, departmentId: u.departmentId, departmentName: u.department?.name ?? null };
+  return { id: u.id, username: u.username, fullName: u.fullName, role: u.role, departmentId: u.departmentId, departmentName: u.department?.name ?? null, canDeleteDocuments: u.canDeleteDocuments };
 });
 
 /** Səhifələr üçün: giriş yoxdursa /login-ə, icazə yoxdursa /dashboard-a yönləndirir */

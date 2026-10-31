@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { EmployeeDossier } from "@/components/employee/dossier";
 import { PersonToolbar, SavedToast } from "@/components/employee/person-actions";
-import { can } from "@/lib/auth/roles";
+import { can, canDeleteDocumentsDirectly } from "@/lib/auth/roles";
 import { canAccessPerson } from "@/lib/auth/scope";
 import { requireUser } from "@/lib/auth/session";
 import { getDossier } from "@/lib/queries";
@@ -18,7 +18,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   return { title: data?.person.fullName ?? "Əməkdaş" };
 }
 
-export default async function EmployeePage({ params }: { params: Promise<{ id: string }> }) {
+export default async function EmployeePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
   const user = await requireUser("employees.view");
   const { id } = await params;
   const canEdit = can(user.role, "employees.edit");
@@ -46,7 +46,7 @@ export default async function EmployeePage({ params }: { params: Promise<{ id: s
           </div>
         </div>
       )}
-      <EmployeeDossier data={data} />
+      <EmployeeDossier data={data} canEdit={canEdit} canDelete={canDeleteDocumentsDirectly(user)} tab={(await searchParams).tab} />
       <p className="mt-6 text-xs text-muted-foreground">
         Qeydiyyata alan: {p.createdBy ? `${p.createdBy.fullName} (@${p.createdBy.username})` : "idxal / sistem"} · {formatDateTime(p.createdAt)}
         {p.updatedBy && ` — son dəyişiklik: ${p.updatedBy.fullName} (@${p.updatedBy.username}) · ${formatDateTime(p.updatedAt)}`}

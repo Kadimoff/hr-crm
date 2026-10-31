@@ -1,0 +1,62 @@
+# Production (Coolify — "Docker Compose" build pack və ya: docker compose -f docker-compose.prod.yml up -d --build)
+# Lazımi dəyişənlər: POSTGRES_PASSWORD, APP_URL (məs. https://hr.adnsu.az). Tətbiq 3000 portundadır.
+services:
+  app:
+    build: .
+    command: ["app"]
+    environment:
+      ROLE: app
+      DATABASE_URL: postgresql://ehr:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD verilməlidir}@postgres:5432/ehr?schema=public
+      REDIS_URL: redis://redis:6379
+      APP_URL: ${APP_URL:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+    volumes:
+      - storage:/app/storage
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["worker"]
+    environment:
+      ROLE: worker
+      DATABASE_URL: postgresql://ehr:${POSTGRES_PASSWORD}@postgres:5432/ehr?schema=public
+      REDIS_URL: redis://redis:6379
+    # Excel faylları app-in yüklədiyi qovluqdan oxunur — eyni volume
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      app: { condition: service_healthy }
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ehr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ehr
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ehr -d ehr"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+
+volumes:
+  # Şəxsi iş sənədləri, backup-lar (.zip), idxal faylları — mütləq daimi saxlanılmalıdır
+  storage:
+  pgdata:
+  redisdata:

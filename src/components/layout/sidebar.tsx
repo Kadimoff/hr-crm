@@ -2,26 +2,201 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import type { UserRole } from "@prisma/client";
-import { Building2Icon, DatabaseIcon, FileBarChartIcon, HardDriveIcon, LayoutDashboardIcon, MenuIcon, NetworkIcon, ScrollTextIcon, ShieldIcon, UploadCloudIcon, UsersIcon, XIcon } from "lucide-react";
+import {
+  BriefcaseIcon,
+  Building2Icon,
+  ChevronDownIcon,
+  CrownIcon,
+  DatabaseIcon,
+  FileBarChartIcon,
+  FlaskConicalIcon,
+  FolderOpenIcon,
+  GraduationCapIcon,
+  HardDriveIcon,
+  InboxIcon,
+  LayoutDashboardIcon,
+  MenuIcon,
+  NetworkIcon,
+  ScrollTextIcon,
+  ShieldIcon,
+  UploadCloudIcon,
+  UsersIcon,
+  WrenchIcon,
+  XIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useState } from "react";
 import { can, type Permission } from "@/lib/auth/roles";
+import { findUnit, PERSONNEL_CATEGORIES, PERSONNEL_HREF, type UnitNode } from "@/lib/personnel";
 import type { SidebarSummary } from "@/lib/queries";
 import { cn, formatDateTime, formatNumber } from "@/lib/utils";
 
 export const NAV: { href: string; label: string; description: string; group: string; icon: typeof UsersIcon; permission?: Permission }[] = [
   { href: "/dashboard", label: "İdarə paneli", description: "Ümumi icmal", group: "Analitika", icon: LayoutDashboardIcon },
   { href: "/employees", label: "Əməkdaşlar", description: "Fiziki şəxslər və dosye", group: "Analitika", icon: UsersIcon, permission: "employees.view" },
+  { href: PERSONNEL_HREF, label: "Şəxsi iş", description: "Heyət və bölmələr üzrə", group: "Analitika", icon: FolderOpenIcon, permission: "employees.view" },
   { href: "/org-chart", label: "Struktur", description: "Struktur ağacı", group: "Analitika", icon: NetworkIcon },
   { href: "/reports", label: "Hesabatlar", description: "Çap və Excel ixracı", group: "Analitika", icon: FileBarChartIcon, permission: "reports" },
   { href: "/import", label: "İdxal mərkəzi", description: "Excel şablonları", group: "Məlumat", icon: UploadCloudIcon, permission: "import" },
   { href: "/admin/users", label: "İstifadəçilər", description: "Rollar və səlahiyyətlər", group: "İdarəetmə", icon: ShieldIcon, permission: "users.manage" },
+  { href: "/admin/requests", label: "Sorğular", description: "Sənəd silmə sorğuları", group: "İdarəetmə", icon: InboxIcon, permission: "requests.manage" },
   { href: "/admin/audit", label: "Audit jurnalı", description: "Dəyişikliklərin tarixçəsi", group: "İdarəetmə", icon: ScrollTextIcon, permission: "audit.view" },
   { href: "/admin/database", label: "Verilənlər bazası", description: "Backup, bərpa, təmizləmə", group: "İdarəetmə", icon: HardDriveIcon, permission: "database.manage" },
 ];
 
 const navFor = (role: UserRole) => NAV.filter((n) => !n.permission || can(role, n.permission));
+
+const CATEGORY_ICONS: Record<(typeof PERSONNEL_CATEGORIES)[number]["slug"], typeof UsersIcon> = {
+  akademik: GraduationCapIcon,
+  inzibati: BriefcaseIcon,
+  "tedris-komekci": FlaskConicalIcon,
+  rehberlik: CrownIcon,
+  texniki: WrenchIcon,
+};
+
+const isUnder = (pathname: string, href: string) => pathname === href || pathname.startsWith(`${href}/`);
+
+/** Açılıb-bağlanan alt siyahı */
+function Collapse({ open, children }: { open: boolean; children: ReactNode }) {
+  return (
+    <AnimatePresence initial={false}>
+      {open && (
+        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
+          {children}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function SubLink({ href, active, className, children }: { href: string; active: boolean; className?: string; children: ReactNode }) {
+  return (
+    <Link
+      href={href}
+      aria-current={active ? "page" : undefined}
+      className={cn("relative flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors", active ? "text-white" : "hover:bg-sidebar-accent/80 hover:text-white", className)}
+    >
+      {active && <motion.span layoutId="nav-active" className="absolute inset-0 rounded-lg bg-blue-600 shadow-md shadow-blue-600/25" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
+      {children}
+    </Link>
+  );
+}
+
+/** Alt siyahını açıb-bağlayan kiçik ox düyməsi */
+function Toggle({ open, onClick, label }: { open: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={open}
+      aria-label={label}
+      className="rounded-md p-1.5 text-sidebar-muted transition-colors hover:bg-sidebar-accent/80 hover:text-white"
+    >
+      <ChevronDownIcon className={cn("size-3.5 transition-transform", open && "rotate-180")} />
+    </button>
+  );
+}
+
+/** Heyət bölməsinin struktur ağacı: vahidlər (fakültə, departament) və onların alt bölmələri */
+function UnitTree({ baseHref, nodes, openNode, setOpenNode }: { baseHref: string; nodes: UnitNode[]; openNode?: string; setOpenNode: (id?: string) => void }) {
+  const pathname = usePathname();
+  return (
+    <div className="my-0.5 ml-4 space-y-0.5 border-l border-sidebar-border pl-2">
+      {nodes.map((n) => {
+        const href = `${baseHref}/${n.id}`;
+        const open = openNode === n.id;
+        return (
+          <div key={n.id}>
+            <div className="flex items-center gap-0.5">
+              <SubLink href={href} active={pathname === href} className="py-1.5 text-xs">
+                <span className="relative leading-snug">{n.name}</span>
+              </SubLink>
+              {n.children.length > 0 && <Toggle open={open} onClick={() => setOpenNode(open ? undefined : n.id)} label={open ? "Alt bölmələri gizlət" : "Alt bölmələri göstər"} />}
+            </div>
+            {n.children.length > 0 && (
+              <Collapse open={open}>
+                <div className="my-0.5 ml-3 space-y-0.5 border-l border-sidebar-border pl-2">
+                  {n.children.map((c) => {
+                    const cHref = `${baseHref}/${c.id}`;
+                    return (
+                      <SubLink key={c.id} href={cHref} active={pathname === cHref} className="py-1.5 text-[11px]">
+                        <span className="relative leading-snug">{c.name}</span>
+                      </SubLink>
+                    );
+                  })}
+                </div>
+              </Collapse>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** «Şəxsi iş»: heyət bölmələri; akademik heyətin içində fakültələr və kafedralar, inzibati heyətin içində departamentlər */
+function PersonnelNav({ label, description, icon: Icon, units }: { label: string; description: string; icon: typeof UsersIcon; units: SidebarSummary["units"] }) {
+  const pathname = usePathname();
+  const inSection = isUnder(pathname, PERSONNEL_HREF);
+  // Cari səhifə: /personnel/<bölmə>/<vahid id>
+  const [, , slug, unitId] = pathname.split("/");
+  const current = PERSONNEL_CATEGORIES.find((c) => inSection && c.slug === slug);
+  const currentNode = current?.units && unitId ? findUnit(units[current.units], unitId)?.node.id : undefined;
+  const [open, setOpen] = useState(inSection);
+  const [openCats, setOpenCats] = useState<Record<string, boolean>>(current ? { [current.slug]: true } : {});
+  const [openNode, setOpenNode] = useState(currentNode);
+  // Başqa yerdən bu bölməyə keçəndə menyu özü açılır
+  useEffect(() => {
+    if (inSection) setOpen(true);
+    if (current) setOpenCats((v) => ({ ...v, [current.slug]: true }));
+    if (currentNode) setOpenNode(currentNode);
+  }, [inSection, current, currentNode]);
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className={cn("flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-left text-sm font-medium transition-colors hover:bg-sidebar-accent/80 hover:text-white", inSection && "text-white")}
+      >
+        <Icon className="size-4 shrink-0 text-blue-400" />
+        <span className="flex-1">
+          <span className="block">{label}</span>
+          <span className="block text-[10px] text-sidebar-muted">{description}</span>
+        </span>
+        <ChevronDownIcon className={cn("size-4 shrink-0 text-sidebar-muted transition-transform", open && "rotate-180")} />
+      </button>
+      <Collapse open={open}>
+        <div className="mt-1 ml-5 space-y-0.5 border-l border-sidebar-border pl-2">
+          {PERSONNEL_CATEGORIES.map((c) => {
+            const href = `${PERSONNEL_HREF}/${c.slug}`;
+            const CatIcon = CATEGORY_ICONS[c.slug];
+            const nodes = c.units ? units[c.units] : [];
+            const catOpen = !!openCats[c.slug];
+            return (
+              <div key={c.slug}>
+                <div className="flex items-center gap-0.5">
+                  <SubLink href={href} active={pathname === href}>
+                    <CatIcon className={cn("relative size-3.5 shrink-0", pathname !== href && "text-blue-400")} />
+                    <span className="relative truncate">{c.label}</span>
+                  </SubLink>
+                  {nodes.length > 0 && <Toggle open={catOpen} onClick={() => setOpenCats((v) => ({ ...v, [c.slug]: !catOpen }))} label={catOpen ? "Bölmələri gizlət" : "Bölmələri göstər"} />}
+                </div>
+                {nodes.length > 0 && (
+                  <Collapse open={catOpen}>
+                    <UnitTree baseHref={href} nodes={nodes} openNode={openNode} setOpenNode={setOpenNode} />
+                  </Collapse>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Collapse>
+    </div>
+  );
+}
 
 const pct = (v: number) => `${formatNumber(v * 100, 1)}%`;
 
@@ -78,7 +253,8 @@ function SidebarContent({ role, summary, onClose }: { role: UserRole; summary: S
             {items
               .filter((n) => n.group === group)
               .map(({ href, label, description, icon: Icon }) => {
-                const active = pathname === href || pathname.startsWith(`${href}/`);
+                if (href === PERSONNEL_HREF) return <PersonnelNav key={href} label={label} description={description} icon={Icon} units={summary.units} />;
+                const active = isUnder(pathname, href);
                 return (
                   <Link
                     key={href}
@@ -96,10 +272,15 @@ function SidebarContent({ role, summary, onClose }: { role: UserRole; summary: S
                       />
                     )}
                     <Icon className={cn("relative size-4 shrink-0", !active && "text-blue-400")} />
-                    <span className="relative">
+                    <span className="relative flex-1">
                       <span className="block">{label}</span>
                       <span className={cn("block text-[10px]", active ? "text-white/80" : "text-sidebar-muted")}>{description}</span>
                     </span>
+                    {href === "/admin/requests" && summary.pendingRequests > 0 && (
+                      <span className="relative rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-bold text-white tabular-nums" title="Gözləyən sorğular">
+                        {summary.pendingRequests}
+                      </span>
+                    )}
                   </Link>
                 );
               })}

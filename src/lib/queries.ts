@@ -1,9 +1,10 @@
 import "server-only";
-import type { StaffCategory } from "@prisma/client";
+import type { Prisma, StaffCategory } from "@prisma/client";
 import { computeLeaveEntitlement, workYearContaining } from "./calc/leave";
 import { computePayroll, type PayrollInput } from "./calc/payroll";
 import { computeSeniority, todayUtc } from "./calc/seniority";
 import { personScopeWhere } from "./auth/scope";
+import { UNIT_GROUPS, type UnitGroup, type UnitNode } from "./personnel";
 import { prisma } from "./db";
 
 export const STAFF_CATEGORY_LABELS: Record<StaffCategory, string> = {
@@ -47,9 +48,20 @@ export async function getRecentImports() {
 
 export type RecentImport = Awaited<ReturnType<typeof getRecentImports>>[number];
 
-/** Sidebar xülasəsi: son idxal və ştat doluluğu (scope — şöbə rəhbəri üçün bölmə id-ləri) */
-export async function getSidebarSummary(scope: string[] | null) {
-  const [last, filled, staffing] = await Promise.all([
+const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name, "az");
+
+/** «Şəxsi iş» menyusunun struktur ağacı: vahidlər və alt bölmələri, əlifba sırası ilə */
+export async function getUnitTree(group: UnitGroup): Promise<UnitNode[]> {
+  const nodes = await prisma.department.findMany({
+    where: { ...UNIT_GROUPS[group], closedOn: null },
+    select: { id: true, name: true, children: { where: { closedOn: null }, select: { id: true, name: true } } },
+  });
+  return nodes.map((n) => ({ ...n, children: n.children.sort(byName) })).sort(byName);
+}
+
+/** Sidebar xülasəsi: son idxal, ştat doluluğu, menyu ağacı (scope — şöbə rəhbəri üçün bölmə id-ləri; withRequests — root üçün sorğu sayı) */
+export async function getSidebarSummary(scope: string[] | null, withRequests = false) {
+  const [last, filled, staffing, faculties, admin, pendingRequests] = await Promise.all([
     prisma.importBatch.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true, status: true } }),
     prisma.employment.aggregate({
       where: { status: { not: "TERMINATED" }, person: { deletedAt: null }, ...(scope ? { departmentId: { in: scope } } : {}) },
@@ -60,12 +72,19 @@ export async function getSidebarSummary(scope: string[] | null) {
       SELECT DISTINCT ON (s."departmentId", s."positionId") s."departmentId", s."unitCount"::float8 AS "unitCount"
       FROM "StaffingUnit" s
       ORDER BY s."departmentId", s."positionId", s."periodDate" DESC`,
+    // «Şəxsi iş» alt menyuları
+    getUnitTree("faculties"),
+    getUnitTree("admin"),
+    // Root üçün: gözləyən silmə sorğuları
+    withRequests ? prisma.documentDeletionRequest.count({ where: { status: "PENDING" } }) : 0,
   ]);
   const totalUnits = staffing.filter((s) => !scope || scope.includes(s.departmentId)).reduce((sum, s) => sum + s.unitCount, 0);
   return {
     lastImport: last ? { createdAt: last.createdAt.toISOString(), status: last.status } : null,
     filledUnits: Number(filled._sum.unitShare ?? 0),
     totalUnits,
+    units: { faculties, admin } satisfies Record<UnitGroup, UnitNode[]>,
+    pendingRequests,
   };
 }
 
@@ -75,12 +94,20 @@ export type SidebarSummary = Awaited<ReturnType<typeof getSidebarSummary>>;
 //  Əməkdaşlar siyahısı
 // ----------------------------------------------------------------------------
 
-/** scope — şöbə rəhbəri üçün bölmə id-ləri; archived — yalnız arxivdəkilər */
-export async function getEmployeeRows(scope: string[] | null = null, opts: { archived?: boolean } = {}) {
+/**
+ * scope — şöbə rəhbəri üçün bölmə id-ləri; archived — yalnız arxivdəkilər;
+ * employment — yalnız belə aktiv iş yeri olanlar, sətirdəki vəzifə/bölmə də həmin iş yerindən götürülür
+ */
+export async function getEmployeeRows(scope: string[] | null = null, opts: { archived?: boolean; employment?: Prisma.EmploymentWhereInput } = {}) {
+  const match: Prisma.EmploymentWhereInput | undefined = opts.employment && {
+    AND: [opts.employment, scope ? { departmentId: { in: scope } } : {}],
+    status: { not: "TERMINATED" },
+  };
   const persons = await prisma.person.findMany({
-    where: personScopeWhere(scope, opts),
+    where: match ? { AND: [personScopeWhere(scope, opts), { employments: { some: match } }] } : personScopeWhere(scope, opts),
     orderBy: { fullName: "asc" },
     select: {
+      _count: { select: { employments: true } },
       createdAt: true,
       deletedAt: true,
       createdBy: { select: { username: true } },
@@ -95,6 +122,7 @@ export async function getEmployeeRows(scope: string[] | null = null, opts: { arc
       academicDegrees: { select: { degree: true } },
       academicTitles: { select: { title: true } },
       employments: {
+        where: match,
         orderBy: [{ isPrimary: "desc" }, { hireDate: "desc" }],
         select: {
           status: true,
@@ -124,7 +152,7 @@ export async function getEmployeeRows(scope: string[] | null = null, opts: { arc
       hireDate: main?.hireDate.toISOString() ?? null,
       baseSalary: main ? Number(main.baseSalary) : null,
       status: main?.status ?? null,
-      contracts: p.employments.length,
+      contracts: p._count.employments,
       createdBy: p.createdBy?.username ?? null,
       createdAt: p.createdAt.toISOString(),
       deletedAt: p.deletedAt?.toISOString() ?? null,
@@ -169,6 +197,11 @@ export async function getDossier(id: string) {
       partyMemberships: true,
       electedOrgans: true,
       legalLiabilities: true,
+      documents: { orderBy: [{ documentDate: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }], include: {
+          uploadedBy: { select: { fullName: true } },
+          deletionRequests: { where: { status: "PENDING" }, take: 1, select: { reason: true, requestedBy: { select: { fullName: true } } } },
+        },
+      },
     },
   });
   if (!p) return null;
@@ -299,6 +332,7 @@ export interface OrgStaff {
   employmentId: string;
   personId: string;
   code: string;
+  fin: string;
   fullName: string;
   gender: "MALE" | "FEMALE";
   departmentId: string;
@@ -336,6 +370,7 @@ export async function getOrgStaff(scope: string[] | null): Promise<OrgStaff[]> {
         select: {
           id: true,
           code: true,
+          fin: true,
           fullName: true,
           gender: true,
           mobilePhone: true,
@@ -354,6 +389,7 @@ export async function getOrgStaff(scope: string[] | null): Promise<OrgStaff[]> {
       employmentId: e.id,
       personId: e.person.id,
       code: e.person.code,
+      fin: e.person.fin,
       fullName: e.person.fullName,
       gender: e.person.gender,
       departmentId: e.departmentId,

@@ -318,6 +318,7 @@ model Person {
   partyMemberships  PartyMembership[]
   electedOrgans     ElectedOrgan[]
   legalLiabilities  LegalLiability[]
+  documents         PersonDocument[]
 
   // Qeydiyyat və arxiv (soft delete) — kim, nə vaxt
   createdById String?
@@ -364,6 +365,69 @@ model Employment {
   @@unique([personId, positionId, departmentId, hireDate])
   @@index([departmentId, status])
   @@index([positionId, status])
+}
+
+enum DocumentKind {
+  EMR // əmr
+  MUQAVILE // əmək müqaviləsi və əlavələri
+  SEXSIYYET // şəxsiyyət vəsiqəsi, FİN, ünvan
+  TEHSIL // diplom, sertifikat, elmi dərəcə
+  ARAYIS // arayış, tibbi sənəd
+  DIGER // digər
+}
+
+/// «Şəxsi iş» qovluğu: əmrlər, skan edilmiş sənədlər, şəkillər, Word/Excel faylları.
+/// Fayl diskdə saxlanılır (DOCUMENTS_DIR/<personId>/<id>.<uzantı>), burada yalnız məlumatı.
+model PersonDocument {
+  id               String                    @id @default(cuid())
+  personId         String
+  person           Person                    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  kind             DocumentKind
+  title            String
+  number           String? // əmrin / sənədin nömrəsi
+  documentDate     DateTime?                 @db.Date // əmrin / sənədin tarixi
+  fileName         String // yüklənən faylın orijinal adı
+  extension        String // kiçik hərflə, nöqtəsiz: pdf, jpg, docx ...
+  size             Int
+  storagePath      String
+  uploadedById     String?
+  uploadedBy       User?                     @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  deletionRequests DocumentDeletionRequest[]
+
+  createdAt DateTime @default(now())
+
+  @@index([personId, kind])
+}
+
+enum DeletionRequestStatus {
+  PENDING // root-un qərarını gözləyir
+  APPROVED // təsdiq edildi, sənəd silindi
+  REJECTED // imtina edildi, sənəd qalır
+}
+
+/// Sənədi birbaşa silə bilməyən istifadəçinin root-a silmə sorğusu.
+/// Sənəd silinəndən sonra da tarixçə qalsın deyə adlar snapshot kimi saxlanılır.
+model DocumentDeletionRequest {
+  id            String                @id @default(cuid())
+  documentId    String?
+  document      PersonDocument?       @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  personId      String
+  personName    String
+  documentTitle String
+  fileName      String
+  reason        String
+  status        DeletionRequestStatus @default(PENDING)
+  requestedById String?
+  requestedBy   User?                 @relation("DeletionRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  decidedById   String?
+  decidedBy     User?                 @relation("DeletionDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt     DateTime?
+  decisionNote  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([status, createdAt])
+  @@index([documentId])
 }
 
 /// Oklad dəyişikliklərinin temporal tarixçəsi
@@ -767,25 +831,30 @@ enum UserRole {
 }
 
 model User {
-  id           String      @id @default(cuid())
-  username     String      @unique // kiçik hərflə saxlanılır
-  fullName     String
-  passwordHash String
-  role         UserRole
-  departmentId String? // DEPT_HEAD üçün məcburi
-  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  isActive     Boolean     @default(true)
-  lastLoginAt  DateTime?
-  createdById  String?
-  createdBy    User?       @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdUsers User[]      @relation("UserCreatedBy")
+  id                 String      @id @default(cuid())
+  username           String      @unique // kiçik hərflə saxlanılır
+  fullName           String
+  passwordHash       String
+  role               UserRole
+  departmentId       String? // DEPT_HEAD üçün məcburi
+  department         Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  isActive           Boolean     @default(true)
+  /// Şəxsi iş sənədlərini sorğusuz silə bilər (ROOT həmişə silir) — root verir
+  canDeleteDocuments Boolean     @default(false)
+  lastLoginAt        DateTime?
+  createdById        String?
+  createdBy          User?       @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers       User[]      @relation("UserCreatedBy")
 
-  sessions       Session[]
-  auditLogs      AuditLog[]
-  personsCreated Person[]      @relation("PersonCreatedBy")
-  personsUpdated Person[]      @relation("PersonUpdatedBy")
-  personsDeleted Person[]      @relation("PersonDeletedBy")
-  importBatches  ImportBatch[]
+  sessions          Session[]
+  auditLogs         AuditLog[]
+  personsCreated    Person[]                  @relation("PersonCreatedBy")
+  personsUpdated    Person[]                  @relation("PersonUpdatedBy")
+  personsDeleted    Person[]                  @relation("PersonDeletedBy")
+  importBatches     ImportBatch[]
+  documents         PersonDocument[]
+  deletionRequests  DocumentDeletionRequest[] @relation("DeletionRequestedBy")
+  deletionDecisions DocumentDeletionRequest[] @relation("DeletionDecidedBy")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

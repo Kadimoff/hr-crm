@@ -20,13 +20,28 @@ function weighted<T>(pairs: [T, number][]): T {
 const date = (y: number, m = 1, d = 1) => new Date(Date.UTC(y, m - 1, d));
 
 const FACULTIES: [string, string, string[]][] = [
-  ["F1", "Neft-mexanika fakültəsi", ["Neft-mədən maşınları", "Mexanika", "Materialşünaslıq"]],
-  ["F2", "İnformasiya texnologiyaları və idarəetmə fakültəsi", ["Kompüter mühəndisliyi", "İnformasiya texnologiyaları", "Proseslərin avtomatlaşdırılması"]],
-  ["F3", "Kimya-texnologiya fakültəsi", ["Kimya mühəndisliyi", "Neft-kimya texnologiyası"]],
-  ["F4", "Geoloji-kəşfiyyat fakültəsi", ["Geologiya", "Geofizika"]],
-  ["F5", "Energetika fakültəsi", ["Elektroenergetika", "İstilik energetikası"]],
-  ["F6", "İqtisadiyyat və idarəetmə fakültəsi", ["Sənaye iqtisadiyyatı", "Menecment"]],
-  ["RK", "Rektorluq və inzibati bölmələr", ["Kadrlar şöbəsi", "Mühasibatlıq", "Təsərrüfat şöbəsi"]],
+  ["F1", "Sənaye mühəndisliyi fakültəsi", ["Cihaz mühəndisliyi", "Mexanika", "Elektronika və avtomatika"]],
+  ["F2", "Rəqəmsal texnologiyalar fakültəsi", ["Kompüter elmləri və mühəndisliyi", "İnformasiya texnologiyaları", "Riyaziyyat"]],
+  ["F3", "Kimya texnologiyaları fakültəsi", ["Kimya", "Neft-kimya mühəndisliyi", "Biotexnologiya və qida mühəndisliyi", "Proseslərin təhlükəsizliyi mühəndisliyi"]],
+  ["F4", "Yer elmləri və neft mühəndisliyi fakültəsi", ["Yer elmləri", "Neft-qaz mühəndisliyi"]],
+  ["F5", "Energetika fakültəsi", ["Enerji istehsalı və elektroenergetika", "Elektromexanika", "Fizika"]],
+  ["F6", "İqtisadiyyat və menecment fakültəsi", ["Sənaye iqtisadiyyatı", "Menecment"]],
+  ["F7", "Biznes və idarəetmə fakültəsi", ["İqtisadiyyat", "Biznes analitikası", "Humanitar fənlər"]],
+  ["F8", "Xarici dillər mərkəzi", []],
+  [
+    "RK",
+    "Rektorluq və inzibati bölmələr",
+    [
+      "İnsan resursları departamenti",
+      "Maliyyə və təminat departamenti",
+      "Təsərrüfat şöbəsi",
+      "ADNSU Biznes Məktəbi",
+      "ADNSU nəzdində UFAZ",
+      "Arxiv bölməsi",
+      "Elm departamenti",
+      "Magistratura və doktorantura mərkəzi",
+    ],
+  ],
 ];
 
 // [ad, oklad, çəki, əsas məzuniyyət günü]

@@ -23,6 +23,7 @@ export interface UserRow {
   departmentId: string | null;
   departmentName: string | null;
   isActive: boolean;
+  canDeleteDocuments: boolean;
   lastLoginAt: string | null;
   createdAt: string;
   createdBy: string | null;
@@ -163,6 +164,15 @@ function EditUserDialog({ user, departments, isMe }: { user: UserRow; department
             Hesab aktivdir
             {isMe && <input type="hidden" name="isActive" value="on" />}
           </label>
+          {user.role !== "ROOT" && (
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" name="canDeleteDocuments" defaultChecked={user.canDeleteDocuments} className="mt-0.5 size-4 accent-[var(--primary)]" />
+              <span>
+                Şəxsi iş sənədlərini sorğusuz silə bilər
+                <span className="block text-xs text-muted-foreground">Seçilməsə, silmək üçün administratora sorğu göndərir. Root həmişə silə bilər.</span>
+              </span>
+            </label>
+          )}
           <FormError message={f.state.error} />
           <DialogFooter>
             <Button type="submit" disabled={f.pending}>
@@ -246,6 +256,7 @@ export function UsersAdmin({ users, departments, meId }: { users: UserRow[]; dep
                   <div className="flex flex-wrap gap-1">
                     <Badge variant={ROLE_VARIANT[u.role]}>{ROLE_LABELS[u.role]}</Badge>
                     {!u.isActive && <Badge variant="danger">Deaktiv</Badge>}
+                    {u.role !== "ROOT" && u.canDeleteDocuments && <Badge variant="outline">Sənəd silə bilər</Badge>}
                   </div>
                 </td>
                 <td className="px-3 py-2.5">{u.departmentName ?? <span className="text-muted-foreground/70">—</span>}</td>

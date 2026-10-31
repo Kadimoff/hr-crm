@@ -4,6 +4,7 @@ import { RotateCcwIcon, SearchIcon } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { DateInput } from "@/components/ui/date-input";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -71,9 +72,9 @@ export function AuditFilters({ users, actions, entities }: { users: string[]; ac
         {select("user", "İstifadəçi", users.map((u) => ({ value: u, label: `@${u}` })))}
       </div>
       <div className="flex w-full items-center gap-1.5 text-sm text-muted-foreground sm:w-auto">
-        <Input type="date" aria-label="Başlanğıc tarixi" value={params.get("from") ?? ""} onChange={(e) => update({ from: e.target.value || undefined })} className="w-full sm:w-36" />
+        <DateInput aria-label="Başlanğıc tarixi" value={params.get("from") ?? ""} onChange={(v) => update({ from: v || undefined })} className="w-full sm:w-36" />
         –
-        <Input type="date" aria-label="Son tarix" value={params.get("to") ?? ""} onChange={(e) => update({ to: e.target.value || undefined })} className="w-full sm:w-36" />
+        <DateInput aria-label="Son tarix" value={params.get("to") ?? ""} onChange={(v) => update({ to: v || undefined })} className="w-full sm:w-36" />
       </div>
       {active && (
         <Button

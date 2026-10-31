@@ -19,5 +19,7 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // Fayl yükləmə marşrutları çıxarılıb: middleware sorğu gövdəsini 10 MB-dək bufferləyib kəsir (böyük skanlar, backup).
+  // Onlar girişi özləri yoxlayır (apiUser). api/health — konteynerin girişsiz sağlamlıq yoxlaması.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/health|api/import/upload|api/admin/backups/upload|api/persons/[^/]+/documents).*)"],
 };

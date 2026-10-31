@@ -1,10 +1,12 @@
 import { notFound } from "next/navigation";
+import { OriginalQr } from "@/components/print/original-qr";
 import { KV, PrintBar, PrintTable, Sheet, SheetSection } from "@/components/print/print-bar";
 import { formatYmd } from "@/lib/calc/seniority";
 import { canAccessPerson } from "@/lib/auth/scope";
 import { requireUser } from "@/lib/auth/session";
 import { audit } from "@/lib/audit";
 import { APP_NAME, ORG_NAME, ORG_UNIT } from "@/lib/org";
+import { absoluteUrl } from "@/lib/qr";
 import { getDossier, STAFF_CATEGORY_LABELS } from "@/lib/queries";
 import { formatAzn, formatDateTime } from "@/lib/utils";
 import { formatAzDate } from "@/lib/validation/primitives";
@@ -35,11 +37,14 @@ export default async function PrintPersonPage({ params }: { params: Promise<{ id
             <div className="text-[11px] tracking-wider text-neutral-500 uppercase">{ORG_NAME} · {ORG_UNIT}</div>
             <h1 className="mt-1 text-[18px] font-bold">Əməkdaşın şəxsi vərəqəsi</h1>
           </div>
-          <div className="text-right text-[11px] text-neutral-600">
-            <div>
-              Kod: <b className="font-mono text-neutral-900">{p.code}</b>
+          <div className="flex items-start gap-5">
+            <div className="text-right text-[11px] text-neutral-600">
+              <div>
+                Kod: <b className="font-mono text-neutral-900">{p.code}</b>
+              </div>
+              <div>Tarix: {formatDateTime(new Date())}</div>
             </div>
-            <div>Tarix: {formatDateTime(new Date())}</div>
+            <OriginalQr url={await absoluteUrl(`/employees/${p.id}`)} label="Dosyenin orijinalı" />
           </div>
         </header>
 

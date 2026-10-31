@@ -37,7 +37,8 @@ const createSchema = withDepartmentRule(
   }),
 );
 
-const updateSchema = withDepartmentRule(baseSchema.extend({ id: z.string().min(1), isActive: z.preprocess((v) => v === "on" || v === "true", z.boolean()) }));
+const checkbox = z.preprocess((v) => v === "on" || v === "true", z.boolean());
+const updateSchema = withDepartmentRule(baseSchema.extend({ id: z.string().min(1), isActive: checkbox, canDeleteDocuments: checkbox }));
 
 const fieldErrors = (e: z.ZodError) => {
   const out: Record<string, string> = {};
@@ -76,6 +77,8 @@ export async function updateUserAction(_prev: UserFormState, form: FormData): Pr
   const parsed = updateSchema.safeParse(Object.fromEntries(form));
   if (!parsed.success) return { fieldErrors: fieldErrors(parsed.error) };
   const { id, fullName, role, departmentId, isActive } = parsed.data;
+  // Root həmişə birbaşa silir — bayraq yalnız digər rollar üçündür
+  const canDeleteDocuments = role !== "ROOT" && parsed.data.canDeleteDocuments;
 
   const before = await prisma.user.findUnique({ where: { id }, include: { department: { select: { name: true } } } });
   if (!before) return { error: "İstifadəçi tapılmadı" };
@@ -88,7 +91,7 @@ export async function updateUserAction(_prev: UserFormState, form: FormData): Pr
   const after = await prisma.$transaction(async (tx) => {
     const u = await tx.user.update({
       where: { id },
-      data: { fullName, role, isActive, departmentId: role === "DEPT_HEAD" ? departmentId : null },
+      data: { fullName, role, isActive, canDeleteDocuments, departmentId: role === "DEPT_HEAD" ? departmentId : null },
       include: { department: { select: { name: true } } },
     });
     // Deaktiv edilən və ya rolu dəyişən istifadəçinin açıq sessiyaları bağlanır
@@ -96,8 +99,8 @@ export async function updateUserAction(_prev: UserFormState, form: FormData): Pr
     return u;
   });
   const changes = diff(
-    { fullName: before.fullName, role: before.role, department: before.department?.name ?? null, isActive: before.isActive },
-    { fullName: after.fullName, role: after.role, department: after.department?.name ?? null, isActive: after.isActive },
+    { fullName: before.fullName, role: before.role, department: before.department?.name ?? null, isActive: before.isActive, canDeleteDocuments: before.canDeleteDocuments },
+    { fullName: after.fullName, role: after.role, department: after.department?.name ?? null, isActive: after.isActive, canDeleteDocuments: after.canDeleteDocuments },
   );
   if (Object.keys(changes).length) {
     await audit({ user: actor, action: "UPDATE", entity: "User", entityId: id, summary: `İstifadəçi dəyişdirildi: @${before.username}`, changes: changes as Prisma.InputJsonValue });

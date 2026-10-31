@@ -3,7 +3,7 @@
 import { DownloadIcon, PrinterIcon } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /** Hesabat parametrləri URL-də saxlanılır; Excel və çap eyni parametrlərlə açılır */
@@ -25,9 +25,9 @@ export function ReportParams({ reportKey, params, defaults }: { reportKey: strin
     <div className="flex flex-wrap items-center gap-2">
       {params.includes("period") && (
         <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <Input type="date" aria-label="Dövrün başlanğıcı" value={sp.get("from") ?? defaults.from} onChange={(e) => update("from", e.target.value)} className="w-36" />
+          <DateInput aria-label="Dövrün başlanğıcı" value={sp.get("from") ?? defaults.from} onChange={(v) => update("from", v)} className="w-36" />
           –
-          <Input type="date" aria-label="Dövrün sonu" value={sp.get("to") ?? defaults.to} onChange={(e) => update("to", e.target.value)} className="w-36" />
+          <DateInput aria-label="Dövrün sonu" value={sp.get("to") ?? defaults.to} onChange={(v) => update("to", v)} className="w-36" />
         </div>
       )}
       {params.includes("status") && (

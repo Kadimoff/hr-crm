@@ -3,6 +3,7 @@ import { departmentScope } from "@/lib/auth/scope";
 import { apiUser } from "@/lib/auth/session";
 import { audit } from "@/lib/audit";
 import { ORG_NAME } from "@/lib/org";
+import { absoluteUrl, qrPng } from "@/lib/qr";
 import { getReport, readReportParams } from "@/lib/reports";
 
 export const runtime = "nodejs";
@@ -14,7 +15,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ key:
   if (user instanceof Response) return user;
   const report = getReport((await params).key);
   if (!report) return Response.json({ error: "Hesabat tapılmadı" }, { status: 404 });
-  const result = await report.run(await departmentScope(user), readReportParams(new URL(request.url).searchParams));
+  const sp = new URL(request.url).searchParams;
+  const result = await report.run(await departmentScope(user), readReportParams(sp));
+  // Orijinal — eyni parametrlərlə sistemdəki hesabat səhifəsi
+  const original = await absoluteUrl(`/reports?${new URLSearchParams({ r: report.key, ...Object.fromEntries(sp) })}`);
 
   const wb = new ExcelJS.Workbook();
   wb.creator = "ASOİU HR CRM";
@@ -37,6 +41,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ key:
   });
   for (const r of result.rows) ws.addRow(result.columns.map((c) => r[c.key] ?? null));
   if (result.totals) ws.addRow(result.columns.map((c) => result.totals![c.key] ?? null)).font = { bold: true };
+
+  // Cədvəldən sonra: orijinala link və QR kod
+  ws.addRow([]);
+  const linkRow = ws.addRow(["Hesabatın orijinalı (sistemdə):"]);
+  linkRow.font = { italic: true, color: { argb: "FF64748B" } };
+  const link = ws.getCell(linkRow.number, 2 <= n ? 2 : 1);
+  link.value = { text: original, hyperlink: original };
+  link.font = { color: { argb: "FF2563EB" }, underline: true };
+  const qr = wb.addImage({ buffer: (await qrPng(original)) as unknown as ExcelJS.Buffer, extension: "png" });
+  ws.addImage(qr, { tl: { col: 0, row: linkRow.number }, ext: { width: 110, height: 110 } });
   ws.views = [{ state: "frozen", ySplit: 3 }];
 
   await audit({ user, action: "EXPORT", entity: "Report", entityId: report.key, summary: `Hesabat Excel-ə ixrac edildi: ${report.title} (${result.rows.length} sətir)` });

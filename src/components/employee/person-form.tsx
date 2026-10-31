@@ -6,6 +6,7 @@ import { startTransition, useActionState, useEffect, useState } from "react";
 import { savePersonAction } from "@/actions/persons";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { DateInput } from "@/components/ui/date-input";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -126,16 +127,25 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
   };
 
   const field = (name: string, label: string, props: React.ComponentProps<typeof Input> & { hint?: string; wide?: boolean } = {}) => {
-    const { hint, wide, required, ...rest } = props;
+    const { hint, wide, required, type, ...rest } = props;
     return (
       <FormField label={label} htmlFor={name} error={fe[name]} hint={hint} required={required} className={cn(wide && "sm:col-span-2")}>
-        <Input id={name} name={name} defaultValue={v(name)} aria-invalid={!!fe[name]} className={cn(fe[name] && "border-danger")} {...rest} />
+        {type === "date" ? (
+          // Brauzerin dilindən asılı olmayaraq gün.ay.il
+          <DateInput id={name} name={name} defaultValue={v(name)} aria-invalid={!!fe[name]} />
+        ) : (
+          <Input id={name} name={name} type={type} defaultValue={v(name)} aria-invalid={!!fe[name]} className={cn(fe[name] && "border-danger")} {...rest} />
+        )}
       </FormField>
     );
   };
 
   return (
-    <form onSubmit={onSubmit} onChange={(e) => touch((e.target as unknown as HTMLInputElement).name)} className="flex flex-col gap-6" noValidate>
+    <form onSubmit={onSubmit} onChange={(e) => {
+        // DateInput-un görünən sahəsinin adı data-field-dədir
+        const t = e.target as unknown as HTMLInputElement;
+        touch(t.name || t.dataset.field || "");
+      }} className="flex flex-col gap-6" noValidate>
       {editing && <input type="hidden" name="id" value={v("id")} />}
       <input type="hidden" name="employmentId" value={v("employmentId")} />
 

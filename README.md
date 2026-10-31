@@ -34,12 +34,34 @@ Digər əmrlər:
 
 Kod GitHub-dan gəlir, məlumatlar isə backup faylı ilə köçürülür (fayl repo-ya **qoyulmur** — şəxsi məlumat və şifrə hash-ları var):
 
-1. Köhnə kompüterdə: **Verilənlər bazası → Backup al**, sonra həmin sətirdə **Yüklə** (`backup-….json.gz`).
+1. Köhnə kompüterdə: **Verilənlər bazası → Backup al**, sonra həmin sətirdə **Yüklə** (`backup-….zip`).
 2. Yeni kompüterdə `npm run setup`, `npm run dev`, /setup-da müvəqqəti ROOT yaradın.
 3. **Verilənlər bazası → Fayldan yüklə** ilə faylı seçin, sonra onun sətrində **Bərpa et**.
 4. Bərpadan sonra köhnə kompüterdəki istifadəçi adı və şifrə ilə daxil olun.
 
 Struktur xəritəsinin düzülüşü və görünüşü brauzerdə saxlanılır, köçürülmür.
+
+**Şəxsi iş sənədləri** (dosyedəki «Şəxsi iş» tabına yüklənən PDF, skan, şəkil, Word, Excel faylları) diskdə `storage/documents/` qovluğunda saxlanılır (`.env`-də `DOCUMENTS_DIR`) və **backup faylına daxildir**: backup — bir `.zip` faylıdır (`database.json` + `documents/`). Bərpa həm bazanı, həm sənəd fayllarını qaytarır. Çox böyük backup-ı brauzerdən yükləmək əvəzinə faylı yeni kompüterdə birbaşa `storage/backups/` qovluğuna kopyalamaq da olar — siyahıda görünəcək. Köhnə `.json.gz` backup-lar yalnız bazanı bərpa edir.
+
+## Production (Docker / Coolify)
+
+Bir image iki rejimdə işləyir: `app` (Next.js, başlayanda bazanın sxemini `prisma db push` ilə tətbiq edir) və `worker` (Excel idxalı). `docker-compose.prod.yml` hamısını qaldırır: app, worker, PostgreSQL 16, Redis.
+
+```bash
+POSTGRES_PASSWORD='güclü-şifrə' APP_URL='https://hr.example.az' docker compose -f docker-compose.prod.yml up -d --build
+```
+
+| Dəyişən | Məna |
+| --- | --- |
+| `POSTGRES_PASSWORD` | Məcburi — bazanın şifrəsi |
+| `APP_URL` | Sistemin xarici ünvanı — çap və Excel-dəki QR kod / linklər bunu göstərir |
+| `COOKIE_SECURE` | HTTPS arxasında `true` (defolt) |
+| `APP_PORT` | Host portu (defolt 3000) |
+
+- **Volume-lar**: `storage` (şəxsi iş sənədləri, backup `.zip`-lər, idxal faylları — app və worker ortaq istifadə edir), `pgdata`, `redisdata`. `storage` itərsə sənəd faylları itir — server backup-ına daxil edin.
+- **Sağlamlıq yoxlaması**: `GET /api/health` (giriş tələb etmir, bazanı yoxlayır).
+- Image build zamanı typecheck və testlər işləyir — keçməsə yeni versiya yaranmır, işləyən qalır.
+- İlk açılışda `/setup`-da ROOT yaradılır; köhnə məlumatlar **Verilənlər bazası → Fayldan yüklə → Bərpa et** ilə gətirilir.
 
 ## Struktur
 

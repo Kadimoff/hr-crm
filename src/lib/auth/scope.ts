@@ -10,9 +10,14 @@ import type { CurrentUser } from "./session";
 export async function departmentScope(user: CurrentUser): Promise<string[] | null> {
   if (user.role !== "DEPT_HEAD") return null;
   if (!user.departmentId) return [];
+  return departmentSubtree(user.departmentId);
+}
+
+/** Bölmənin özü və bütün alt bölmələrinin id-ləri */
+export async function departmentSubtree(rootId: string): Promise<string[]> {
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     WITH RECURSIVE tree AS (
-      SELECT id FROM "Department" WHERE id = ${user.departmentId}
+      SELECT id FROM "Department" WHERE id = ${rootId}
       UNION ALL
       SELECT d.id FROM "Department" d JOIN tree t ON d."parentId" = t.id
     )
