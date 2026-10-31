@@ -4,11 +4,14 @@ import { UploadWizard } from "@/components/import/upload-wizard";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { requireUser } from "@/lib/auth/session";
 import { TEMPLATES } from "@/lib/validation/templates";
 
 export const metadata = { title: "İdxal mərkəzi" };
 
-export default function ImportPage() {
+export default async function ImportPage() {
+  // API-lər də "import" tələb edir — səhifə də hüququ olmayana açılmasın
+  await requireUser("import");
   return (
     <>
       <PageHeader
