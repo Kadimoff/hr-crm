@@ -724,9 +724,9 @@ export function OrgChart({
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, []);
-  // Klaviatura yalnız siçanlı cihazda avtomatik fokuslanır — telefonda açılışda ekran klaviaturası xəritəni örtürdü
+  // Klaviatura toxunma ekranı olmayan cihazda avtomatik fokuslanır — telefonda açılışda ekran klaviaturası xəritəni örtürdü
   useEffect(() => {
-    if (window.matchMedia("(pointer: fine)").matches) searchInput.current?.focus();
+    if (!window.matchMedia("(pointer: coarse)").matches) searchInput.current?.focus();
   }, []);
 
   const totals = useMemo(() => tree.reduce((a, n) => ({ units: a.units + n.units, filled: a.filled + n.filled, headcount: a.headcount + n.headcount }), { units: 0, filled: 0, headcount: 0 }), [tree]);
