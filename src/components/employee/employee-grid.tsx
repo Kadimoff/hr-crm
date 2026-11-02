@@ -3,7 +3,6 @@
 import {
   flexRender,
   getCoreRowModel,
-  getFacetedUniqueValues,
   getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
@@ -29,13 +28,14 @@ import {
   UsersIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { replaceUrlParams, searchHaystack, searchKey } from "@/lib/list-state";
 import type { EmployeeRow } from "@/lib/queries";
 import { cn, formatAzn, formatIsoDate, initials } from "@/lib/utils";
 
@@ -149,6 +149,77 @@ const columns: ColumnDef<EmployeeRow>[] = [
 const DEFAULT_HIDDEN: VisibilityState = { birthDate: false, fin: false, phone: false, email: false, contracts: false, gender: false, createdBy: false };
 const FACETS = ["department", "staffCategory", "status", "degree"] as const;
 const FACET_LABEL: Record<(typeof FACETS)[number], string> = { department: "Bölmə", staffCategory: "Heyət", status: "Status", degree: "Elmi dərəcə" };
+/** URL parametrləri: ?q=…&department=…&page=2 — «geri» ilə qayıdanda siyahı eyni vəziyyətdə açılır */
+const URL_KEYS = ["q", ...FACETS, "page", "size", "sort"] as const;
+const SEARCH_DEBOUNCE_MS = 200;
+
+/**
+ * Axtarış sahəsi öz vəziyyətini saxlayır: yazı dərhal görünür, cədvəl isə yazı dayandıqdan sonra
+ * (debounce + startTransition) filtrlənir — zəif telefonda da hərflər «donmur».
+ */
+function SearchBox({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+  const [text, setText] = useState(value);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  /** Özümüzün göndərdiyi son dəyər — onun qayıtması sahəni sıfırlamamalıdır (yoxsa sonrakı hərflər itir) */
+  const committed = useRef(value);
+  // Xaricdən dəyişəndə (Sıfırla, URL-dən bərpa) sahə də yenilənir
+  useEffect(() => {
+    if (value !== committed.current) {
+      committed.current = value;
+      setText(value);
+    }
+  }, [value]);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const commit = (v: string) => {
+    clearTimeout(timer.current);
+    committed.current = v;
+    startTransition(() => onCommit(v));
+  };
+  return (
+    <div className="relative w-full sm:w-64">
+      <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        type="search"
+        enterKeyHint="search"
+        value={text}
+        onChange={(e) => {
+          const v = e.target.value;
+          setText(v);
+          clearTimeout(timer.current);
+          timer.current = setTimeout(() => commit(v), SEARCH_DEBOUNCE_MS);
+        }}
+        onKeyDown={(e) => e.key === "Enter" && commit(text)}
+        placeholder="Ad, kod, FİN, vəzifə…"
+        aria-label="Əməkdaş axtar"
+        className="pl-9"
+      />
+    </div>
+  );
+}
+
+/** Filtr seçimi — memo: axtarışa yazarkən Radix Select-lər yenidən qurulmur */
+const FacetSelect = memo(function FacetSelect({ id, values, current, onChange }: { id: (typeof FACETS)[number]; values: string[]; current?: string; onChange: (id: string, v: string | undefined) => void }) {
+  return (
+    <Select value={current ?? ""} onValueChange={(v) => onChange(id, v === ALL ? undefined : v)}>
+      <SelectTrigger
+        aria-label={FACET_LABEL[id]}
+        title={FACET_LABEL[id]}
+        className={cn("w-full sm:w-auto sm:max-w-[220px]", current && "border-primary/60 bg-primary/5 text-primary hover:bg-primary/10")}
+      >
+        <SelectValue placeholder={FACET_LABEL[id]} />
+      </SelectTrigger>
+      <SelectContent align="start">
+        <SelectItem value={ALL}>Hamısı</SelectItem>
+        <SelectSeparator />
+        {values.map((v) => (
+          <SelectItem key={v} value={v}>
+            {id === "status" ? (STATUS[v]?.label ?? v) : v}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+});
 
 export function EmployeeGrid({ rows, canAdd = false, initialQuery = "" }: { rows: EmployeeRow[]; canAdd?: boolean; initialQuery?: string }) {
   const router = useRouter();
@@ -159,6 +230,26 @@ export function EmployeeGrid({ rows, canAdd = false, initialQuery = "" }: { rows
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZES[0] });
   const [scrolledX, setScrolledX] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  /** URL-dən bərpa bitənə qədər URL-ə yazılmır (yoxsa ilkin boş vəziyyət parametrləri silərdi) */
+  const [urlRestored, setUrlRestored] = useState(false);
+
+  // «Geri» / yeniləmə: vəziyyət ünvan sətrindən bərpa olunur
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const q = p.get("q");
+    if (q !== null) setGlobalFilter(q.slice(0, 100));
+    const filters = FACETS.flatMap((id) => (p.get(id) ? [{ id, value: p.get(id)! }] : []));
+    if (filters.length) setColumnFilters(filters);
+    const sort = p.get("sort");
+    if (sort) setSorting([{ id: sort.replace(/^-/, ""), desc: sort.startsWith("-") }]);
+    const size = Number(p.get("size"));
+    const page = Number(p.get("page"));
+    setPagination((prev) => ({
+      pageSize: (PAGE_SIZES as readonly number[]).includes(size) ? size : prev.pageSize,
+      pageIndex: Number.isInteger(page) && page > 1 ? page - 1 : prev.pageIndex,
+    }));
+    setUrlRestored(true);
+  }, []);
 
   // Sütun seçimi brauzerdə yadda saxlanılır
   useEffect(() => {
@@ -178,6 +269,10 @@ export function EmployeeGrid({ rows, canAdd = false, initialQuery = "" }: { rows
     }
   }, [columnVisibility]);
 
+  // Axtarış sətirləri siyahı yüklənəndə bir dəfə hazırlanır — hər hərfdə yalnız `includes`
+  const haystack = useMemo(() => new Map(rows.map((r) => [r.id, searchHaystack([r.fullName, r.code, r.fin, r.position, r.department, r.email])])), [rows]);
+  const needle = useMemo(() => searchKey(globalFilter.trim()), [globalFilter]);
+
   const table = useReactTable({
     data: rows,
     columns,
@@ -188,16 +283,13 @@ export function EmployeeGrid({ rows, canAdd = false, initialQuery = "" }: { rows
     onColumnFiltersChange: setColumnFilters,
     onColumnVisibilityChange: setColumnVisibility,
     onPaginationChange: setPagination,
-    globalFilterFn: (row, _id, value: string) => {
-      const q = value.trim().toLocaleLowerCase("az");
-      if (!q) return true;
-      const r = row.original;
-      return [r.fullName, r.code, r.fin, r.position, r.department, r.email].some((v) => v?.toLocaleLowerCase("az").includes(q));
-    },
+    globalFilterFn: (row) => !needle || (haystack.get(row.original.id)?.includes(needle) ?? false),
+    // Qlobal filtr sətir başına bir dəfə çağırılsın (defolt — hər sütun üçün ayrıca)
+    getColumnCanGlobalFilter: (column) => column.id === "fullName",
+    autoResetPageIndex: false,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getFacetedUniqueValues: getFacetedUniqueValues(),
     getPaginationRowModel: getPaginationRowModel(),
   });
 
@@ -214,6 +306,54 @@ export function EmployeeGrid({ rows, canAdd = false, initialQuery = "" }: { rows
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
   }, [pageIndex, pageSize]);
+
+  // Filtr / axtarış dəyişəndə 1-ci səhifəyə qayıdılır (autoResetPageIndex söndürülüb — URL-dən bərpa olunan səhifə itməsin)
+  const filterSig = JSON.stringify([globalFilter, columnFilters]);
+  const prevSig = useRef(filterSig);
+  useEffect(() => {
+    if (prevSig.current === filterSig) return;
+    prevSig.current = filterSig;
+    if (urlRestored) setPagination((p) => (p.pageIndex === 0 ? p : { ...p, pageIndex: 0 }));
+  }, [filterSig, urlRestored]);
+  // Səhifə sayı azalıbsa (məs. yeni filtr) — sonuncu mövcud səhifə
+  useEffect(() => {
+    if (pageIndex > 0 && pageIndex >= table.getPageCount()) setPagination((p) => ({ ...p, pageIndex: Math.max(0, table.getPageCount() - 1) }));
+  }, [pageIndex, table, filteredRows.length]);
+
+  // Vəziyyət URL-ə yazılır (tarixçəyə yeni qeyd yox — replaceState)
+  useEffect(() => {
+    if (!urlRestored) return;
+    const t = setTimeout(() => {
+      const f = Object.fromEntries(columnFilters.map((c) => [c.id, String(c.value)]));
+      const s = sorting[0];
+      replaceUrlParams({
+        q: globalFilter.trim() || undefined,
+        ...Object.fromEntries(FACETS.map((id) => [id, f[id]])),
+        page: pageIndex > 0 ? String(pageIndex + 1) : undefined,
+        size: pageSize !== PAGE_SIZES[0] ? String(pageSize) : undefined,
+        sort: s && !(s.id === "fullName" && !s.desc) ? `${s.desc ? "-" : ""}${s.id}` : undefined,
+      } satisfies Partial<Record<(typeof URL_KEYS)[number], string | undefined>>);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [urlRestored, globalFilter, columnFilters, sorting, pageIndex, pageSize]);
+
+  const onFacetChange = useCallback((id: string, v: string | undefined) => {
+    setColumnFilters((prev) => [...prev.filter((f) => f.id !== id), ...(v === undefined ? [] : [{ id, value: v }])]);
+  }, []);
+  const facetValues = useMemo(
+    () =>
+      Object.fromEntries(
+        FACETS.map((id) => {
+          const set = new Set<string>();
+          for (const r of rows) {
+            const v = r[id];
+            if (typeof v === "string" && v !== "") set.add(v);
+          }
+          return [id, [...set].sort((a, b) => a.localeCompare(b, "az"))];
+        }),
+      ) as Record<(typeof FACETS)[number], string[]>,
+    [rows],
+  );
 
   const resetFilters = () => {
     setColumnFilters([]);
@@ -238,36 +378,11 @@ export function EmployeeGrid({ rows, canAdd = false, initialQuery = "" }: { rows
   return (
     <Card className="overflow-hidden">
       <div className="flex flex-wrap items-center gap-2 border-b p-3">
-        <div className="relative w-full sm:w-64">
-          <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={globalFilter} onChange={(e) => setGlobalFilter(e.target.value)} placeholder="Ad, kod, FİN, vəzifə…" className="pl-9" />
-        </div>
+        <SearchBox value={globalFilter} onCommit={setGlobalFilter} />
         <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
-          {FACETS.map((id) => {
-            const col = table.getColumn(id)!;
-            const values = [...col.getFacetedUniqueValues().keys()].filter((v): v is string => typeof v === "string" && v !== "").sort((a, b) => a.localeCompare(b, "az"));
-            const current = col.getFilterValue() as string | undefined;
-            return (
-              <Select key={id} value={current ?? ""} onValueChange={(v) => col.setFilterValue(v === ALL ? undefined : v)}>
-                <SelectTrigger
-                  aria-label={FACET_LABEL[id]}
-                  title={FACET_LABEL[id]}
-                  className={cn("w-full sm:w-auto sm:max-w-[220px]", current && "border-primary/60 bg-primary/5 text-primary hover:bg-primary/10")}
-                >
-                  <SelectValue placeholder={FACET_LABEL[id]} />
-                </SelectTrigger>
-                <SelectContent align="start">
-                  <SelectItem value={ALL}>Hamısı</SelectItem>
-                  <SelectSeparator />
-                  {values.map((v) => (
-                    <SelectItem key={v} value={v}>
-                      {id === "status" ? (STATUS[v]?.label ?? v) : v}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            );
-          })}
+          {FACETS.map((id) => (
+            <FacetSelect key={id} id={id} values={facetValues[id]} current={columnFilters.find((f) => f.id === id)?.value as string | undefined} onChange={onFacetChange} />
+          ))}
         </div>
         {filtered && (
           <Button variant="ghost" size="sm" onClick={resetFilters}>
