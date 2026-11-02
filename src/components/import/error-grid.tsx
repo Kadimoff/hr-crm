@@ -399,7 +399,19 @@ export function ErrorGrid({ batchId, sheetKey, disabled, onSubmitted }: Props) {
           </table>
         )}
       </div>
-      <RowLevelIssues rows={rows} />
+      <RowLevelIssues
+        rows={rows}
+        onJump={(rowNumber) => {
+          const idx = rows.findIndex((r) => r.rowNumber === rowNumber);
+          if (idx < 0) {
+            toast.info(`Sətir ${rowNumber} bu siyahıda yoxdur`, { description: "«Yalnız problemli sətirlər» seçimini söndürüb yenidən baxın" });
+            return;
+          }
+          setActive({ r: idx, c: 1 });
+          virtualizer.scrollToIndex(idx, { align: "center" });
+          scrollRef.current?.focus();
+        }}
+      />
       <p className="text-[11px] text-muted-foreground">
         İki dəfə klik və ya Enter — redaktə · Esc — ləğv · Tab / oxlar — naviqasiya · Delete — xananı təmizlə
       </p>
@@ -407,18 +419,34 @@ export function ErrorGrid({ batchId, sheetKey, disabled, onSubmitted }: Props) {
   );
 }
 
-/** Konkret sütuna bağlı olmayan xətalar (məs. yazılma xətası) */
-function RowLevelIssues({ rows }: { rows: GridRow[] }) {
+/** Konkret sütuna bağlı olmayan xətalar (məs. yazılma xətası) və «gözləyir» izahları — xətalı sətirə keçidlə */
+function RowLevelIssues({ rows, onJump }: { rows: GridRow[]; onJump: (rowNumber: number) => void }) {
   const list = rows.flatMap((r) => r.errors.filter((e) => e.field === "*").map((e) => ({ row: r.rowNumber, ...e })));
   if (list.length === 0) return null;
-  return (
-    <div className="rounded-lg border border-danger/30 bg-danger-soft p-3 text-xs text-danger">
-      {list.slice(0, 20).map((e, i) => (
-        <div key={i}>
-          Sətir {e.row}: {e.message}
-        </div>
+  const errors = list.filter((e) => e.severity === "error");
+  const warnings = list.filter((e) => e.severity !== "error");
+  const item = (e: (typeof list)[number], i: number) => (
+    <div key={i} className="flex flex-wrap items-baseline gap-x-2">
+      <span>
+        Sətir {e.row}: {e.message}
+      </span>
+      {e.relatedRows?.map((n) => (
+        <button key={n} type="button" title="Xətalı sətirə keç" className="font-medium text-primary underline-offset-2 hover:underline" onClick={() => onJump(n)}>
+          Sətir {n} →
+        </button>
       ))}
     </div>
+  );
+  return (
+    <>
+      {errors.length > 0 && <div className="flex flex-col gap-1 rounded-lg border border-danger/30 bg-danger-soft p-3 text-xs text-danger">{errors.slice(0, 20).map(item)}</div>}
+      {warnings.length > 0 && (
+        <div className="flex flex-col gap-1 rounded-lg border border-warning/40 bg-warning-soft p-3 text-xs text-foreground" data-waiting-rows>
+          {warnings.slice(0, 20).map(item)}
+          {warnings.length > 20 && <div className="text-muted-foreground">… və daha {warnings.length - 20}</div>}
+        </div>
+      )}
+    </>
   );
 }
 

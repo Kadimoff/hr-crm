@@ -1,7 +1,7 @@
 import type { ImportBatchStatus, Prisma, PrismaClient } from "@prisma/client";
 import { getSheet } from "../validation/templates";
 import type { TemplateKey } from "../validation/types";
-import { commitBatch } from "./committer";
+import { annotateWaitingRows, commitBatch } from "./committer";
 import { streamWorkbook } from "./parser";
 import { emit } from "./progress";
 import { refreshFileCounters, validateBatch } from "./validator";
@@ -63,6 +63,8 @@ export async function runCommit(db: PrismaClient, batchId: string, revalidate: b
   await commitBatch(db, batchId);
   // Commit edilmiş sətirlər yeni kontekstdir — qalan sətirlərin xətalarını yeniləyirik
   await validateBatch(db, batchId);
+  // Şəxsin başqa sətri xətalı olduğu üçün gözləyən etibarlı sətirlərə izah (yoxlamadan sonra — onu silməsin)
+  await annotateWaitingRows(db, batchId);
   await refreshFileCounters(db, batchId);
   const remaining = await db.stagingRow.count({ where: { batchId, status: { in: ["INVALID", "VALID"] } } });
   await setStatus(db, batchId, remaining > 0 ? "NEEDS_REVIEW" : "COMPLETED");

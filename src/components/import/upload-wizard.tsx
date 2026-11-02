@@ -517,6 +517,16 @@ function ReviewStep({ batch }: { batch: Batch }) {
             </Button>
             {invalid > 0 && <span className="text-[11px] text-muted-foreground">Xətalı sətirlər qalır və sonra düzəldilə bilər</span>}
           </div>
+          {s.waiting > 0 && (
+            <p className="flex w-full gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs" data-waiting-note>
+              <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
+              <span>
+                <b className="tabular-nums">{s.waiting}</b> etibarlı sətir yazılmayıb və gözləyir: həmin əməkdaşların eyni vərəqdə xətalı sətri var. Siyahı vərəqləri (ailə, təhsil,
+                məzuniyyət və s.) şəxs üzrə bütöv — atomik yazılır ki, şəxsin siyahısı yarımçıq qalmasın. Aşağıdakı cədvəldə xətalı sətri düzəldin (izahdakı «Sətir N →»
+                keçidi ilə) — gözləyən sətirlər onunla birlikdə yazılacaq.
+              </span>
+            </p>
+          )}
         </CardContent>
       </Card>
 

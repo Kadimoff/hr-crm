@@ -11,7 +11,14 @@ export interface FieldIssue {
   message: string;
   /** Avtomatik düzəliş təklifi (məs. hesablanmış qeydiyyat tarixi) */
   suggestion?: string;
+  /** Maşın üçün kod — məs. "PERSON_GROUP_BLOCKED" (şəxsin başqa sətirindəki xətaya görə gözləyir) */
+  code?: string;
+  /** Əlaqəli sətirlər (eyni vərəq) — xəta cədvəlində həmin sətirə keçid üçün */
+  relatedRows?: number[];
 }
+
+/** Siyahı vərəqində şəxsin başqa sətiri xətalı olduğu üçün yazılmayan etibarlı sətir */
+export const PERSON_GROUP_BLOCKED = "PERSON_GROUP_BLOCKED";
 
 export type RawRow = Record<string, string>;
 

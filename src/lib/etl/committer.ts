@@ -15,7 +15,7 @@ import {
   type LeaveSheetKey,
   type SheetRow,
 } from "../validation/templates";
-import type { FieldIssue, RawRow, SheetKey } from "../validation/types";
+import { PERSON_GROUP_BLOCKED, type FieldIssue, type RawRow, type SheetKey } from "../validation/types";
 import { emit } from "./progress";
 import { STAGE_ORDER } from "./validator";
 
@@ -358,9 +358,57 @@ async function markCommitted(db: PrismaClient, ids: string[]) {
   if (ids.length) await db.stagingRow.updateMany({ where: { id: { in: ids } }, data: { status: "COMMITTED" } });
 }
 
+/** Siyahı vərəqində şəxsin başqa sətri xətalıdır — etibarlı sətirlər yazılmır, izah (xəbərdarlıq) əlavə olunur */
+async function markWaiting(db: PrismaClient, ids: string[], personCode: string, badRows: number[]) {
+  if (!ids.length) return;
+  const issue: FieldIssue = {
+    field: "*",
+    tier: "reference",
+    severity: "warning",
+    code: PERSON_GROUP_BLOCKED,
+    relatedRows: badRows,
+    message:
+      `Yazılmadı, gözləyir: «${personCode || "—"}» kodlu əməkdaşın bu vərəqdəki ${badRows.length > 1 ? "sətirlərində" : "sətrində"} (${badRows.join(", ")}) xəta var. ` +
+      "Siyahı vərəqləri şəxs üzrə atomik yazılır (köhnə siyahı bütövlükdə əvəz olunur) — xətalı sətir düzəldiləndə bu sətir də onunla birlikdə yazılacaq.",
+  };
+  // Əvvəlki «gözləyir» izahı əvəz olunur, digər xəbərdarlıqlar saxlanılır
+  await db.$executeRaw`
+    UPDATE "StagingRow"
+    SET "errors" = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements("errors") e WHERE e->>'code' IS DISTINCT FROM ${PERSON_GROUP_BLOCKED}), '[]'::jsonb) || jsonb_build_array(${JSON.stringify(issue)}::jsonb),
+        "updatedAt" = now()
+    WHERE "id" = ANY(${ids}::text[])`;
+}
+
 async function markFailed(db: PrismaClient, ids: string[], message: string) {
   const issue: FieldIssue = { field: "*", tier: "reference", severity: "error", message: `Yazılma xətası: ${message}` };
   if (ids.length) await db.stagingRow.updateMany({ where: { id: { in: ids } }, data: { status: "INVALID", errors: [issue] as unknown as Prisma.InputJsonValue } });
+}
+
+/**
+ * Commit-dən (və sonrakı yenidən yoxlamadan) sonra: siyahı vərəqlərində şəxsin başqa sətri xətalı olduğu üçün
+ * yazılmamış etibarlı sətirlərə izah və xətalı sətirlərin nömrələri yazılır — istifadəçi niyə gözlədiyini görür.
+ */
+export async function annotateWaitingRows(db: PrismaClient, batchId: string): Promise<number> {
+  const rows = (await db.stagingRow.findMany({
+    where: { batchId, status: { in: ["VALID", "INVALID"] } },
+    select: { id: true, sheetKey: true, rowNumber: true, status: true, data: true },
+    orderBy: { rowNumber: "asc" },
+  })) as { id: string; sheetKey: SheetKey; rowNumber: number; status: "VALID" | "INVALID"; data: RawRow }[];
+  const groups = new Map<string, typeof rows>();
+  for (const r of rows) {
+    if (!getSheet(r.sheetKey).personScoped) continue;
+    const key = `${r.sheetKey}\u0000${(r.data.personCode ?? "").trim()}`;
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  }
+  let waiting = 0;
+  for (const [key, group] of groups) {
+    const bad = group.filter((r) => r.status === "INVALID").map((r) => r.rowNumber);
+    const ok = group.filter((r) => r.status === "VALID").map((r) => r.id);
+    if (!bad.length || !ok.length) continue;
+    await markWaiting(db, ok, key.split("\u0000")[1] ?? "", bad);
+    waiting += ok.length;
+  }
+  return waiting;
 }
 
 const errMessage = (e: unknown) =>
@@ -411,7 +459,8 @@ export async function commitBatch(db: PrismaClient, batchId: string): Promise<{ 
         for (const e of emps) if (!hireDates.has(e.person.code)) hireDates.set(e.person.code, e.hireDate);
 
         for (const [personCode, group] of groups) {
-          if (group.some((r) => r.status === "INVALID")) continue; // qrup tam etibarlı olmalıdır
+          // Qrup tam etibarlı olmalıdır; etibarlı sətirlər gözləyir — izah commit-dən sonrakı yoxlamadan sonra yazılır (annotateWaitingRows)
+          if (group.some((r) => r.status === "INVALID")) continue;
           const ids = group.map((r) => r.id);
           try {
             const personId = need(lk.persons, personCode, "Əməkdaş");
