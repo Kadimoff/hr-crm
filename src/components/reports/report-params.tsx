@@ -5,9 +5,10 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { DateInput } from "@/components/ui/date-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { REPORT_EVENT_KINDS, REPORT_EVENT_LABELS } from "@/lib/movement-rules";
 
 /** Hesabat parametrləri URL-də saxlanılır; Excel və çap eyni parametrlərlə açılır */
-export function ReportParams({ reportKey, params, defaults }: { reportKey: string; params: ("period" | "status")[]; defaults: { from: string; to: string } }) {
+export function ReportParams({ reportKey, params, defaults }: { reportKey: string; params: ("period" | "status" | "kind")[]; defaults: { from: string; to: string } }) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -38,6 +39,21 @@ export function ReportParams({ reportKey, params, defaults }: { reportKey: strin
           <SelectContent>
             <SelectItem value="active">Yalnız işləyənlər</SelectItem>
             <SelectItem value="all">Azad olunanlar daxil</SelectItem>
+          </SelectContent>
+        </Select>
+      )}
+      {params.includes("kind") && (
+        <Select value={sp.get("kind") ?? "all"} onValueChange={(v) => update("kind", v === "all" ? "" : v)}>
+          <SelectTrigger aria-label="Hərəkətin növü" className="w-auto" id="report-kind">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Bütün növlər</SelectItem>
+            {REPORT_EVENT_KINDS.map((k) => (
+              <SelectItem key={k} value={k}>
+                {REPORT_EVENT_LABELS[k]}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       )}

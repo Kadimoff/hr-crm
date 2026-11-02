@@ -42,7 +42,7 @@ export async function getDashboardDataset(scope: string[] | null): Promise<Dashb
       SELECT DISTINCT ON (s."departmentId", s."positionId") s."departmentId", p."staffCategory", s."unitCount"::float8 AS "unitCount"
       FROM "StaffingUnit" s JOIN "Position" p ON p.id = s."positionId"
       ORDER BY s."departmentId", s."positionId", s."periodDate" DESC`,
-    prisma.absence.findMany({ where: { startDate: { lte: today }, endDate: { gte: today } }, select: { personId: true } }),
+    prisma.absence.findMany({ where: { cancelledAt: null, startDate: { lte: today }, endDate: { gte: today } }, select: { personId: true } }),
   ]);
 
   const byId = new Map(departments.map((d) => [d.id, d]));

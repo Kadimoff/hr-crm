@@ -1,9 +1,10 @@
 import "server-only";
-import type { Prisma } from "@prisma/client";
+import type { FinanceSource, Prisma } from "@prisma/client";
 import { audit } from "@/lib/audit";
 import type { CurrentUser } from "@/lib/auth/session";
 import { formatAzDate } from "@/lib/validation/primitives";
-import { describeMovement, type MovementInput } from "./movement-rules";
+import { logFinanceChanges, moneyValue, pctValue } from "./finance-log";
+import { describeMovement, inferMovementKind, MOVEMENT_KIND_LABELS, movementKindError, type MovementInput } from "./movement-rules";
 
 const DAY = 86_400_000;
 
@@ -27,9 +28,16 @@ export class MovementError extends Error {
  *  1. müqavilə yeni vəziyyətə yenilənir;
  *  2. oklad dəyişibsə, SalaryRecord tarixçəsi qüvvəyə minmə tarixindən bağlanır / açılır;
  *  3. EmploymentMovement qeydi (əvvəl → sonra, əmr məlumatı) yaradılır — Hərəkət hesabatı buradan oxuyur;
- *  4. şəxsin updatedAt-ı yenilənir (açıq redaktə formaları köhnəlir), audit yazılır.
+ *  4. maliyyə tarixçəsinə (FinancialChange) köhnə → yeni dəyərlər, əmr və mənbə (hansı formadan) yazılır;
+ *  5. şəxsin updatedAt-ı yenilənir (açıq redaktə formaları köhnəlir), audit yazılır.
+ * Növ (köçürmə / vəzifə artımı / maaş / ştat dəyişikliyi) verilməyibsə dəyişikliyə görə təyin olunur.
  */
-export async function applyMovement(tx: Prisma.TransactionClient, user: Pick<CurrentUser, "id" | "username">, input: MovementInput): Promise<{ movementId: string; summary: string }> {
+export async function applyMovement(
+  tx: Prisma.TransactionClient,
+  user: Pick<CurrentUser, "id" | "username">,
+  input: MovementInput,
+  source: FinanceSource = "MOVEMENT",
+): Promise<{ movementId: string; summary: string }> {
   const person = await tx.person.findFirst({ where: { id: input.personId, deletedAt: null }, select: { id: true, fullName: true, code: true, updatedAt: true } });
   if (!person) throw new MovementError("Əməkdaş tapılmadı və ya arxivdədir");
   if (input.expectedUpdatedAt && person.updatedAt.toISOString() !== input.expectedUpdatedAt)
@@ -37,7 +45,7 @@ export async function applyMovement(tx: Prisma.TransactionClient, user: Pick<Cur
 
   const emp = await tx.employment.findFirst({
     where: { id: input.employmentId, personId: person.id, status: { not: "TERMINATED" } },
-    include: { department: { select: { id: true, name: true } }, position: { select: { id: true, name: true } } },
+    include: { department: { select: { id: true, name: true } }, position: { select: { id: true, name: true, hazardousAllowancePct: true } } },
   });
   if (!emp) throw new MovementError("Aktiv müqavilə tapılmadı (azad olunmuş müqaviləyə hərəkət yazılmır)", "employmentId");
 
@@ -55,10 +63,14 @@ export async function applyMovement(tx: Prisma.TransactionClient, user: Pick<Cur
   const salaryChanged = Number(emp.baseSalary) !== input.baseSalary;
   const shareChanged = Number(emp.unitShare) !== input.unitShare;
   if (!deptChanged && !posChanged && !salaryChanged && !shareChanged) throw new MovementError("Heç bir dəyişiklik yoxdur — yeni bölmə, vəzifə, oklad və ya ştat payını daxil edin");
+  const changed = { department: deptChanged, position: posChanged, salary: salaryChanged, unitShare: shareChanged };
+  const kind = input.kind ?? inferMovementKind(changed);
+  const kindError = movementKindError(kind, changed);
+  if (kindError) throw new MovementError(kindError.message, kindError.field);
 
   const [dept, pos] = await Promise.all([
     deptChanged ? tx.department.findUnique({ where: { id: input.departmentId }, select: { id: true, name: true, closedOn: true } }) : null,
-    posChanged ? tx.position.findUnique({ where: { id: input.positionId }, select: { id: true, name: true, validTo: true } }) : null,
+    posChanged ? tx.position.findUnique({ where: { id: input.positionId }, select: { id: true, name: true, validTo: true, hazardousAllowancePct: true } }) : null,
   ]);
   if (deptChanged && (!dept || (dept.closedOn && dept.closedOn <= input.effectiveDate))) throw new MovementError("Seçilmiş struktur bölmə mövcud deyil və ya bağlanıb", "departmentId");
   if (posChanged && (!pos || (pos.validTo && pos.validTo <= input.effectiveDate))) throw new MovementError("Seçilmiş vəzifə mövcud deyil və ya bağlanıb", "positionId");
@@ -86,6 +98,7 @@ export async function applyMovement(tx: Prisma.TransactionClient, user: Pick<Cur
       orderNumber: input.orderNumber,
       orderDate: input.orderDate,
       effectiveDate: input.effectiveDate,
+      kind,
       ...(deptChanged ? { fromDepartmentId: emp.departmentId, fromDepartment: emp.department.name, toDepartmentId: dept!.id, toDepartment: dept!.name } : {}),
       ...(posChanged ? { fromPositionId: emp.positionId, fromPosition: emp.position.name, toPositionId: pos!.id, toPosition: pos!.name } : {}),
       ...(salaryChanged ? { fromSalary: emp.baseSalary, toSalary: input.baseSalary } : {}),
@@ -94,6 +107,22 @@ export async function applyMovement(tx: Prisma.TransactionClient, user: Pick<Cur
       createdById: user.id,
     },
   });
+  await logFinanceChanges(
+    tx,
+    { personId: person.id, employmentId: emp.id, effectiveDate: input.effectiveDate, source, userId: user.id, orderNumber: input.orderNumber, orderDate: input.orderDate, movementId: movement.id },
+    [
+      ...(deptChanged ? [{ field: "DEPARTMENT" as const, oldValue: emp.departmentId, newValue: dept!.id, oldLabel: emp.department.name, newLabel: dept!.name }] : []),
+      ...(posChanged
+        ? [
+            { field: "POSITION" as const, oldValue: emp.positionId, newValue: pos!.id, oldLabel: emp.position.name, newLabel: pos!.name },
+            // Zərərli şərait əlavəsi vəzifədən gəlir — vəzifə ilə birlikdə dəyişirsə, ayrıca sətir
+            { field: "HAZARDOUS_PCT" as const, oldValue: pctValue(emp.position.hazardousAllowancePct), newValue: pctValue(pos!.hazardousAllowancePct) },
+          ]
+        : []),
+      ...(salaryChanged ? [{ field: "BASE_SALARY" as const, oldValue: moneyValue(emp.baseSalary), newValue: moneyValue(input.baseSalary) }] : []),
+      ...(shareChanged ? [{ field: "UNIT_SHARE" as const, oldValue: moneyValue(emp.unitShare), newValue: moneyValue(input.unitShare) }] : []),
+    ],
+  );
   await tx.person.update({ where: { id: person.id }, data: { updatedById: user.id } });
 
   const text = describeMovement({
@@ -105,9 +134,10 @@ export async function applyMovement(tx: Prisma.TransactionClient, user: Pick<Cur
     toSalary: salaryChanged ? input.baseSalary : null,
     fromUnitShare: shareChanged ? Number(emp.unitShare) : null,
     toUnitShare: shareChanged ? input.unitShare : null,
-  });
+  }, kind);
   const summary = `Kadr hərəkəti: ${person.fullName} (${person.code}) — ${text.kind}, əmr № ${input.orderNumber} (${formatAzDate(input.orderDate)}), qüvvəyə minir ${formatAzDate(input.effectiveDate)}`;
   const changes: Record<string, unknown> = {
+    kind: MOVEMENT_KIND_LABELS[kind],
     orderNumber: input.orderNumber,
     orderDate: formatAzDate(input.orderDate),
     effectiveDate: formatAzDate(input.effectiveDate),

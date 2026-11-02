@@ -2,7 +2,8 @@ import "server-only";
 import type { Prisma, StaffCategory } from "@prisma/client";
 import { computePayroll, primaryEmploymentIds } from "./calc/payroll";
 import { prisma } from "./db";
-import { describeMovement } from "./movement-rules";
+import { ORDER_LEAVE_LABELS, leaveDays, type OrderLeaveType } from "./leave-rules";
+import { describeMovement, isReportEventKind, movementKindOf, REPORT_EVENT_LABELS, type ReportEventKind } from "./movement-rules";
 import { STAFF_CATEGORY_LABELS } from "./queries";
 import { formatAzDate } from "./validation/primitives";
 
@@ -27,13 +28,15 @@ export interface ReportParams {
   from?: string; // YYYY-MM-DD
   to?: string;
   status?: "active" | "all";
+  /** Kadr hərəkəti: növ filtri (boş — hamısı) */
+  kind?: ReportEventKind;
 }
 
 export interface ReportDef {
   key: string;
   title: string;
   description: string;
-  params: ("period" | "status")[];
+  params: ("period" | "status" | "kind")[];
   run: (scope: string[] | null, params: ReportParams) => Promise<ReportResult>;
 }
 
@@ -208,13 +211,13 @@ export const REPORTS: ReportDef[] = [
   {
     key: "movement",
     title: "Kadr hərəkəti",
-    description: "Seçilmiş dövrdə işə qəbul, köçürmə, oklad dəyişikliyi və işdən azad olunma",
-    params: ["period"],
+    description: "Seçilmiş dövrdə işə qəbul, köçürmə, vəzifə artımı, maaş / ştat dəyişikliyi, ödənişsiz məzuniyyət və azad olunma",
+    params: ["period", "kind"],
     async run(scope, params) {
       const now = new Date();
       const from = parseDay(params.from) ?? new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
       const to = parseDay(params.to) ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-      const [list, moves] = await Promise.all([
+      const [list, moves, leaves] = await Promise.all([
         employments(scope, { OR: [{ hireDate: { gte: from, lte: to } }, { terminationDate: { gte: from, lte: to } }] }),
         // Köçürmə / oklad dəyişikliyi (dosyedəki forma, tam forma və struktur xəritəsi) — şöbə rəhbəri öz bölməsinə gələn və gedənləri görür
         prisma.employmentMovement.findMany({
@@ -225,16 +228,40 @@ export const REPORTS: ReportDef[] = [
           },
           include: { employment: { select: { department: { select: { name: true } }, position: { select: { name: true } }, person: { select: { fullName: true, code: true } } } } },
         }),
+        // Ödənişsiz məzuniyyət (ö/m, ö/sm) — başlama tarixi dövrə düşən, ləğv edilməmiş qeydlər (əmrli və idxaldan)
+        prisma.absence.findMany({
+          where: {
+            type: { in: ["UNPAID", "SOCIAL_UNPAID"] },
+            cancelledAt: null,
+            startDate: { gte: from, lte: to },
+            person: { deletedAt: null, employments: { some: { status: { not: "TERMINATED" }, ...(scope ? { departmentId: { in: scope } } : {}) } } },
+          },
+          include: {
+            person: {
+              select: {
+                fullName: true,
+                code: true,
+                employments: {
+                  where: { status: { not: "TERMINATED" }, ...(scope ? { departmentId: { in: scope } } : {}) },
+                  orderBy: [{ isPrimary: "desc" }, { hireDate: "asc" }],
+                  take: 1,
+                  select: { department: { select: { name: true } }, position: { select: { name: true } } },
+                },
+              },
+            },
+          },
+        }),
       ]);
-      type Event = { date: Date; kind: string; name: string; code: string; department: string; position: string; details: string; order: string };
+      type Event = { date: Date; code_: ReportEventKind; kind: string; name: string; code: string; department: string; position: string; details: string; order: string };
       const events: Event[] = list.flatMap((e) => [
         ...(e.hireDate >= from && e.hireDate <= to
-          ? [{ date: e.hireDate, kind: "İşə qəbul", name: e.person.fullName, code: e.person.code, department: e.department.name, position: e.position.name, details: "", order: "" }]
+          ? [{ date: e.hireDate, code_: "HIRE" as const, kind: "İşə qəbul", name: e.person.fullName, code: e.person.code, department: e.department.name, position: e.position.name, details: "", order: "" }]
           : []),
         ...(e.terminationDate && e.terminationDate >= from && e.terminationDate <= to
           ? [
               {
                 date: e.terminationDate,
+                code_: "TERMINATION" as const,
                 kind: "Azad olunma",
                 name: e.person.fullName,
                 code: e.person.code,
@@ -247,7 +274,7 @@ export const REPORTS: ReportDef[] = [
           : []),
       ]);
       for (const m of moves) {
-        const { kind, details } = describeMovement({
+        const diff = {
           fromDepartment: m.fromDepartment,
           toDepartment: m.toDepartment,
           fromPosition: m.fromPosition,
@@ -256,9 +283,11 @@ export const REPORTS: ReportDef[] = [
           toSalary: m.toSalary === null ? null : Number(m.toSalary),
           fromUnitShare: m.fromUnitShare === null ? null : Number(m.fromUnitShare),
           toUnitShare: m.toUnitShare === null ? null : Number(m.toUnitShare),
-        });
+        };
+        const { kind, details } = describeMovement(diff, m.kind);
         events.push({
           date: m.effectiveDate,
+          code_: movementKindOf(diff, m.kind),
           kind,
           name: m.employment.person.fullName,
           code: m.employment.person.code,
@@ -269,14 +298,31 @@ export const REPORTS: ReportDef[] = [
           order: `№ ${m.orderNumber} · ${formatAzDate(m.orderDate)}`,
         });
       }
-      events.sort((a, b) => a.date.getTime() - b.date.getTime());
-      const rows = events.map((e) => ({ ...e, date: formatAzDate(e.date), details: e.details || null, order: e.order || null }));
-      const hires = events.filter((x) => x.kind === "İşə qəbul").length;
-      const exits = events.filter((x) => x.kind === "Azad olunma").length;
+      for (const a of leaves) {
+        const job = a.person.employments[0];
+        events.push({
+          date: a.startDate,
+          code_: "UNPAID_LEAVE",
+          kind: ORDER_LEAVE_LABELS[a.type as OrderLeaveType] ?? REPORT_EVENT_LABELS.UNPAID_LEAVE,
+          name: a.person.fullName,
+          code: a.person.code,
+          department: job?.department.name ?? "",
+          position: job?.position.name ?? "",
+          details: `${formatAzDate(a.startDate)} – ${formatAzDate(a.endDate)} (${leaveDays(a.startDate, a.endDate)} gün)${a.note ? ` · ${a.note}` : ""}`,
+          order: a.orderNumber ? `№ ${a.orderNumber}${a.orderDate ? ` · ${formatAzDate(a.orderDate)}` : ""}` : "idxal",
+        });
+      }
+      const filtered = params.kind ? events.filter((e) => e.code_ === params.kind) : events;
+      filtered.sort((a, b) => a.date.getTime() - b.date.getTime());
+      const rows = filtered.map(({ code_: _c, ...e }) => ({ ...e, date: formatAzDate(e.date), details: e.details || null, order: e.order || null }));
+      const count = (k: ReportEventKind) => filtered.filter((x) => x.code_ === k).length;
+      const hires = count("HIRE");
+      const exits = count("TERMINATION");
+      const leaveCount = count("UNPAID_LEAVE");
       return {
         columns: [
           { key: "date", header: "Tarix", width: 12 },
-          { key: "kind", header: "Hərəkət", width: 14 },
+          { key: "kind", header: "Növ", width: 22 },
           { key: "name", header: "Soyadı, adı, atasının adı", width: 32 },
           { key: "code", header: "Kod", width: 10 },
           { key: "department", header: "Struktur bölmə", width: 28 },
@@ -285,8 +331,8 @@ export const REPORTS: ReportDef[] = [
           { key: "order", header: "Əmr", width: 18 },
         ],
         rows,
-        totals: { date: "Cəmi", kind: `qəbul ${hires} · hərəkət ${events.length - hires - exits} · azad ${exits}` },
-        note: `Dövr: ${formatAzDate(from)} – ${formatAzDate(to)}`,
+        totals: { date: "Cəmi", kind: `qəbul ${hires} · hərəkət ${filtered.length - hires - exits - leaveCount} · məzuniyyət ${leaveCount} · azad ${exits}` },
+        note: `Dövr: ${formatAzDate(from)} – ${formatAzDate(to)}${params.kind ? ` · növ: ${REPORT_EVENT_LABELS[params.kind]}` : ""}`,
       };
     },
   },
@@ -337,5 +383,6 @@ export const getReport = (key: string | undefined) => REPORTS.find((r) => r.key 
 
 export function readReportParams(sp: URLSearchParams | Record<string, string | undefined>): ReportParams {
   const get = (k: string) => (sp instanceof URLSearchParams ? (sp.get(k) ?? undefined) : sp[k]);
-  return { from: get("from"), to: get("to"), status: get("status") === "all" ? "all" : "active" };
+  const kind = get("kind");
+  return { from: get("from"), to: get("to"), status: get("status") === "all" ? "all" : "active", kind: isReportEventKind(kind) ? kind : undefined };
 }

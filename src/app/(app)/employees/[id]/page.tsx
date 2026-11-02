@@ -7,7 +7,7 @@ import { PersonToolbar, SavedToast } from "@/components/employee/person-actions"
 import { can, canDeleteDocumentsDirectly } from "@/lib/auth/roles";
 import { canAccessPerson } from "@/lib/auth/scope";
 import { requireUser } from "@/lib/auth/session";
-import { getDossier, getPersonFormOptions } from "@/lib/queries";
+import { getDossier, getFinanceHistory, getPersonFormOptions } from "@/lib/queries";
 import { formatDateTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   return { title: data?.person.fullName ?? "Əməkdaş" };
 }
 
-export default async function EmployeePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string }> }) {
+export default async function EmployeePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ tab?: string; asOf?: string }> }) {
   const user = await requireUser("employees.view");
   const { id } = await params;
   const canEdit = can(user.role, "employees.edit");
@@ -28,6 +28,12 @@ export default async function EmployeePage({ params, searchParams }: { params: P
   const p = data.person;
   // Köçürmə / maaş dəyişikliyi forması üçün bölmə və vəzifə siyahıları — yalnız redaktə hüququ olanlara
   const movementOptions = canEdit && !p.deletedAt ? await getPersonFormOptions() : undefined;
+  // Maliyyə tarixçəsi yalnız «finance.history» icazəsi ilə (root, kadr) — şöbə rəhbərinə məlumat ümumiyyətlə sorğulanmır / ötürülmür
+  const sp = await searchParams;
+  const canFinance = can(user.role, "finance.history");
+  const asOfIso = sp.asOf && /^\d{4}-\d{2}-\d{2}$/.test(sp.asOf) && !Number.isNaN(new Date(`${sp.asOf}T00:00:00Z`).getTime()) ? sp.asOf : undefined;
+  const finance = canFinance ? ((await getFinanceHistory(id, asOfIso ? new Date(`${asOfIso}T00:00:00Z`) : null)) ?? undefined) : undefined;
+  const tab = sp.tab === "finance" && !finance ? undefined : sp.tab;
 
   return (
     <>
@@ -48,7 +54,7 @@ export default async function EmployeePage({ params, searchParams }: { params: P
           </div>
         </div>
       )}
-      <EmployeeDossier data={data} canEdit={canEdit} canDelete={canDeleteDocumentsDirectly(user)} tab={(await searchParams).tab} movementOptions={movementOptions} />
+      <EmployeeDossier data={data} canEdit={canEdit} canDelete={canDeleteDocumentsDirectly(user)} tab={tab} movementOptions={movementOptions} finance={finance} asOf={asOfIso} />
       <p className="mt-6 text-xs text-muted-foreground">
         Qeydiyyata alan: {p.createdBy ? `${p.createdBy.fullName} (@${p.createdBy.username})` : "idxal / sistem"} · {formatDateTime(p.createdAt)}
         {p.updatedBy && ` — son dəyişiklik: ${p.updatedBy.fullName} (@${p.updatedBy.username}) · ${formatDateTime(p.updatedAt)}`}

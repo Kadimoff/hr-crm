@@ -3,10 +3,10 @@ import {
   BookOpenIcon,
   BriefcaseIcon,
   CalendarClockIcon,
-  CalendarIcon,
   FolderOpenIcon,
   GraduationCapIcon,
   HeartHandshakeIcon,
+  HistoryIcon,
   IdCardIcon,
   MailIcon,
   MapPinIcon,
@@ -17,13 +17,16 @@ import {
 } from "lucide-react";
 import type * as React from "react";
 import { PersonDocuments } from "@/components/employee/documents";
+import { FinanceHistoryTab } from "@/components/employee/finance-history";
+import { CancelLeaveButton, LeaveDialog } from "@/components/employee/leave-dialog";
 import { MovementDialog } from "@/components/employee/movement-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatYmd } from "@/lib/calc/seniority";
+import { leaveDays, ON_LEAVE_LABELS, ORDER_LEAVE_LABELS, isOrderLeaveType } from "@/lib/leave-rules";
 import { describeMovement } from "@/lib/movement-rules";
-import { STAFF_CATEGORY_LABELS, type Dossier, type PersonFormOptions } from "@/lib/queries";
+import { STAFF_CATEGORY_LABELS, type Dossier, type FinanceHistory, type PersonFormOptions } from "@/lib/queries";
 import { cn, formatAzn, formatNumber, initials } from "@/lib/utils";
 import { formatAzDate } from "@/lib/validation/primitives";
 
@@ -152,7 +155,22 @@ const daysBetween = (a: Date, b: Date) => Math.round((b.getTime() - a.getTime())
 //  Dosye
 // ----------------------------------------------------------------------------
 
-const TABS = ["personal", "contract", "academic", "family", "leave", "attendance", "documents"];
+const TABS = ["personal", "contract", "finance", "academic", "family", "leave", "attendance", "documents"];
+
+/** Kadr hərəkətləri cədvəlinin sətri: köçürmə / vəzifə artımı / maaş / ştat dəyişikliyi və ya ödənişsiz məzuniyyət */
+interface HistoryRow {
+  key: string;
+  date: Date;
+  kind: string;
+  leave: boolean;
+  details: string;
+  order: string;
+  note: string | null;
+  by: string | null;
+  cancelled: { by: string | null; at: Date; reason: string | null } | null;
+  /** Əmrli məzuniyyət — ləğv edilə bilər */
+  cancelId: string | null;
+}
 
 /** tab — açılışda seçilən bölmə (?tab=documents); canEdit — şəxsi işə sənəd yükləmək; canDelete — sənədi sorğusuz silmək */
 export function EmployeeDossier({
@@ -161,29 +179,74 @@ export function EmployeeDossier({
   canDelete = false,
   tab,
   movementOptions,
+  finance,
+  asOf,
 }: {
   data: Dossier;
   canEdit?: boolean;
   canDelete?: boolean;
   tab?: string;
-  /** Verilibsə — «Köçürmə / maaş dəyişikliyi» forması göstərilir */
+  /** Verilibsə — «Kadr hərəkəti» və «Ödənişsiz məzuniyyət» formaları göstərilir */
   movementOptions?: PersonFormOptions;
+  /** Maliyyə tarixçəsi — yalnız «finance.history» icazəsi olanlara (server tərəfdə yoxlanılıb); yoxdursa tab göstərilmir */
+  finance?: FinanceHistory;
+  /** «Tarixə görə baxış» günü (YYYY-MM-DD) */
+  asOf?: string;
 }) {
-  const { person: p, main, seniority, leave, payroll, carryover } = data;
+  const { person: p, main, seniority, leave, payroll, carryover, unpaidLeave } = data;
   const status = main ? STATUS[main.status] : null;
   const activeEmployments = p.employments.filter((e) => e.status !== "TERMINATED");
-  const movements = p.employments
-    .flatMap((e) => e.movements.map((m) => ({ ...m, ...describeMovement({
-      fromDepartment: m.fromDepartment,
-      toDepartment: m.toDepartmentId ? m.toDepartment : null,
-      fromPosition: m.fromPosition,
-      toPosition: m.toPositionId ? m.toPosition : null,
-      fromSalary: m.fromSalary === null ? null : n(m.fromSalary),
-      toSalary: m.toSalary === null ? null : n(m.toSalary),
-      fromUnitShare: m.fromUnitShare === null ? null : n(m.fromUnitShare),
-      toUnitShare: m.toUnitShare === null ? null : n(m.toUnitShare),
-    }) })))
-    .sort((a, b) => b.effectiveDate.getTime() - a.effectiveDate.getTime() || b.createdAt.getTime() - a.createdAt.getTime());
+  const movements: HistoryRow[] = [
+    ...p.employments.flatMap((e) =>
+      e.movements.map((m) => {
+        const t = describeMovement(
+          {
+            fromDepartment: m.fromDepartment,
+            toDepartment: m.toDepartmentId ? m.toDepartment : null,
+            fromPosition: m.fromPosition,
+            toPosition: m.toPositionId ? m.toPosition : null,
+            fromSalary: m.fromSalary === null ? null : n(m.fromSalary),
+            toSalary: m.toSalary === null ? null : n(m.toSalary),
+            fromUnitShare: m.fromUnitShare === null ? null : n(m.fromUnitShare),
+            toUnitShare: m.toUnitShare === null ? null : n(m.toUnitShare),
+          },
+          m.kind,
+        );
+        return {
+          key: m.id,
+          date: m.effectiveDate,
+          kind: t.kind,
+          leave: false,
+          details: t.details,
+          order: `№ ${m.orderNumber} · ${d(m.orderDate)}`,
+          note: m.note,
+          by: m.createdBy?.fullName ?? null,
+          cancelled: null,
+          cancelId: null,
+          _created: m.createdAt,
+        };
+      }),
+    ),
+    // Ödənişsiz məzuniyyətlər (ö/m, ö/sm) — əmrli (dosyedən) və idxaldan; ləğv edilənlər işarə ilə qalır
+    ...p.absences
+      .filter((a) => isOrderLeaveType(a.type))
+      .map((a) => ({
+        key: a.id,
+        date: a.startDate,
+        kind: ORDER_LEAVE_LABELS[a.type as keyof typeof ORDER_LEAVE_LABELS],
+        leave: true,
+        details: `${d(a.startDate)} – ${d(a.endDate)} (${leaveDays(a.startDate, a.endDate)} gün)`,
+        order: a.orderNumber ? `№ ${a.orderNumber} · ${d(a.orderDate)}` : "idxal",
+        note: a.note,
+        by: a.createdBy?.fullName ?? null,
+        cancelled: a.cancelledAt ? { by: a.cancelledBy?.fullName ?? null, at: a.cancelledAt, reason: a.cancelReason } : null,
+        cancelId: canEdit && a.orderNumber && !a.cancelledAt && !p.deletedAt ? a.id : null,
+        _created: a.createdAt,
+      })),
+  ]
+    .sort((a, b) => b.date.getTime() - a.date.getTime() || b._created.getTime() - a._created.getTime())
+    .map(({ _created: _c, ...r }) => r);
+  const leaveForm = canEdit && movementOptions && activeEmployments.length > 0 ? <LeaveDialog personId={p.id} updatedAt={p.updatedAt.toISOString()} /> : null;
   const movementForm =
     canEdit && movementOptions && activeEmployments.length > 0 ? (
       <MovementDialog
@@ -216,6 +279,11 @@ export function EmployeeDossier({
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-xl font-semibold tracking-tight">{p.fullName}</h1>
               {status && <Badge variant={status.variant}>{status.label}</Badge>}
+              {unpaidLeave && isOrderLeaveType(unpaidLeave.type) && (
+                <Badge variant="warning" data-unpaid-leave-badge>
+                  {ON_LEAVE_LABELS[unpaidLeave.type]} ({d(unpaidLeave.startDate)} – {d(unpaidLeave.endDate)})
+                </Badge>
+              )}
               {p.academicTitles.map((t) => (
                 <Badge key={t.id}>{TITLE_LABEL[t.title]}</Badge>
               ))}
@@ -266,6 +334,11 @@ export function EmployeeDossier({
           <TabsTrigger value="contract">
             <BanknoteIcon /> Müqavilə və maaş
           </TabsTrigger>
+          {finance && (
+            <TabsTrigger value="finance">
+              <HistoryIcon /> Maliyyə tarixçəsi
+            </TabsTrigger>
+          )}
           <TabsTrigger value="academic">
             <GraduationCapIcon /> Akademik portfolio
           </TabsTrigger>
@@ -415,7 +488,18 @@ export function EmployeeDossier({
 
         {/* MÜQAVİLƏ VƏ MAAŞ */}
         <TabsContent value="contract" className="flex flex-col gap-4">
-          <Section title="Əmək müqavilələri" icon={BriefcaseIcon} action={movementForm}>
+          <Section
+            title="Əmək müqavilələri"
+            icon={BriefcaseIcon}
+            action={
+              leaveForm || movementForm ? (
+                <div className="flex flex-wrap gap-2">
+                  {leaveForm}
+                  {movementForm}
+                </div>
+              ) : null
+            }
+          >
             <SimpleTable
               rows={p.employments}
               columns={[
@@ -461,33 +545,68 @@ export function EmployeeDossier({
             </div>
           )}
           {(movements.length > 0 || movementForm) && (
-            <Section title="Kadr hərəkətləri" description="Köçürmə, oklad və ştat payı dəyişiklikləri — əmr əsasında" icon={CalendarClockIcon}>
+            <Section
+              title="Kadr hərəkətləri"
+              description="Köçürmə, vəzifə artımı, maaş / ştat dəyişikliyi və ödənişsiz məzuniyyət — əmr əsasında"
+              icon={CalendarClockIcon}
+            >
               <SimpleTable
                 rows={movements}
                 empty="Hələ kadr hərəkəti qeydə alınmayıb"
                 columns={[
-                  { header: "Qüvvəyə minir", cell: (r) => d(r.effectiveDate), className: "tabular-nums whitespace-nowrap" },
-                  { header: "Hərəkət", cell: (r) => <Badge variant="outline">{r.kind}</Badge> },
-                  { header: "Dəyişiklik", cell: (r) => <span className="whitespace-normal">{r.details}</span> },
-                  { header: "Əmr", cell: (r) => `№ ${r.orderNumber} · ${d(r.orderDate)}`, className: "whitespace-nowrap" },
+                  { header: "Tarix", cell: (r) => d(r.date), className: "tabular-nums whitespace-nowrap" },
+                  {
+                    header: "Növ",
+                    cell: (r) => (
+                      <div className="flex flex-col items-start gap-0.5" data-movement-kind={r.kind}>
+                        <Badge variant={r.cancelled ? "outline" : r.leave ? "warning" : "default"} className={cn(r.cancelled && "line-through")}>
+                          {r.kind}
+                        </Badge>
+                        {r.cancelled && (
+                          <Badge variant="danger" data-cancelled>
+                            Ləğv edilib
+                          </Badge>
+                        )}
+                      </div>
+                    ),
+                  },
+                  {
+                    header: "Dəyişiklik",
+                    cell: (r) => (
+                      <span className={cn("whitespace-normal", r.cancelled && "text-muted-foreground line-through")}>
+                        {r.details}
+                        {r.cancelled && (
+                          <span className="block text-[11px] text-danger no-underline" style={{ textDecoration: "none" }}>
+                            ləğv: {r.cancelled.by ?? "—"} · {d(r.cancelled.at)}
+                            {r.cancelled.reason ? ` — ${r.cancelled.reason}` : ""}
+                          </span>
+                        )}
+                      </span>
+                    ),
+                  },
+                  { header: "Əmr", cell: (r) => r.order, className: "whitespace-nowrap" },
                   { header: "Qeyd", cell: (r) => r.note ?? "—" },
-                  { header: "Daxil edib", cell: (r) => r.createdBy?.fullName ?? "—", className: "text-muted-foreground" },
-                ]}
-              />
-            </Section>
-          )}
-          {main && main.salaryHistory.length > 0 && (
-            <Section title="Oklad tarixçəsi" icon={CalendarIcon}>
-              <SimpleTable
-                rows={main.salaryHistory}
-                columns={[
-                  { header: "Dövr", cell: (r) => `${d(r.validFrom)} – ${r.validTo ? d(r.validTo) : "hazırda"}`, className: "tabular-nums" },
-                  { header: "Oklad", cell: (r) => formatAzn(n(r.baseSalary)), className: "tabular-nums text-right" },
+                  { header: "Daxil edib", cell: (r) => r.by ?? "—", className: "text-muted-foreground" },
+                  ...(canEdit
+                    ? [
+                        {
+                          header: " ",
+                          cell: (r: HistoryRow) => (r.cancelId ? <CancelLeaveButton absenceId={r.cancelId} label={`${r.kind}: ${r.details}, əmr ${r.order}`} /> : null),
+                        },
+                      ]
+                    : []),
                 ]}
               />
             </Section>
           )}
         </TabsContent>
+
+        {/* MALİYYƏ TARİXÇƏSİ — yalnız icazəsi olanlara (server tərəfdə ötürülür) */}
+        {finance && (
+          <TabsContent value="finance" className="flex flex-col gap-4">
+            <FinanceHistoryTab data={finance} asOf={asOf} />
+          </TabsContent>
+        )}
 
         {/* AKADEMİK PORTFOLİO */}
         <TabsContent value="academic" className="flex flex-col gap-4">
@@ -727,10 +846,18 @@ export function EmployeeDossier({
               columns={[
                 {
                   header: "Növ",
-                  cell: (r) => <Badge variant={ABSENCE_LABEL[r.type].variant}>{ABSENCE_LABEL[r.type].label}</Badge>,
+                  cell: (r) => (
+                    <span className="flex flex-wrap items-center gap-1">
+                      <Badge variant={r.cancelledAt ? "outline" : ABSENCE_LABEL[r.type].variant} className={cn(r.cancelledAt && "line-through")}>
+                        {ABSENCE_LABEL[r.type].label}
+                      </Badge>
+                      {r.cancelledAt && <Badge variant="danger">Ləğv edilib</Badge>}
+                    </span>
+                  ),
                 },
                 { header: "Dövr", cell: (r) => `${d(r.startDate)} – ${d(r.endDate)}`, className: "tabular-nums whitespace-nowrap" },
                 { header: "Gün", cell: (r) => daysBetween(r.startDate, r.endDate), className: "tabular-nums text-right" },
+                { header: "Əmr", cell: (r) => (r.orderNumber ? `№ ${r.orderNumber} · ${d(r.orderDate)}` : "idxal"), className: "whitespace-nowrap text-muted-foreground" },
               ]}
               empty="İştirak etməmə qeydə alınmayıb"
             />

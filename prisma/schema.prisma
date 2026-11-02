@@ -71,6 +71,35 @@ enum AbsenceType {
   UNPAID // ö/m — ödənişsiz məzuniyyət
 }
 
+/// Kadr hərəkətinin növü (əmrdə göstərilən). Köhnə qeydlərdə null — göstərmədə from/to-ya əsasən təxmini növ
+enum MovementKind {
+  TRANSFER // köçürmə (bölmə və / və ya vəzifə)
+  PROMOTION // vəzifə artımı
+  SALARY_CHANGE // maaş (oklad) dəyişikliyi
+  UNIT_CHANGE // ştat payı dəyişikliyi
+}
+
+/// Maliyyə tarixçəsində izlənən, əməkhaqqına təsir edən sahələr
+enum FinanceField {
+  BASE_SALARY // oklad
+  UNIT_SHARE // ştat payı
+  PAYMENT_FORM // ödəniş forması
+  POSITION // vəzifə (zərərli şərait əlavəsi vəzifədən gəlir)
+  DEPARTMENT // struktur bölmə
+  HAZARDOUS_PCT // ağır / zərərli şəraitə görə əlavə, %
+  TAX_EXEMPTION // VM 102.2 vergi güzəşti (şəxs səviyyəli)
+  DEGREE // elmi dərəcə (şəxs səviyyəli)
+  TITLE // elmi ad (şəxs səviyyəli)
+}
+
+/// Dəyişikliyin hansı yolla edildiyi
+enum FinanceSource {
+  MOVEMENT // dosyedə «Kadr hərəkəti» forması (əmr)
+  EDIT // tam redaktə forması
+  QUICK_EDIT // struktur xəritəsində sürətli redaktə
+  IMPORT // Excel idxalı
+}
+
 enum AcademicDegreeType {
   PHD // Fəlsəfə doktoru
   DSC // Elmlər doktoru
@@ -319,6 +348,7 @@ model Person {
   electedOrgans     ElectedOrgan[]
   legalLiabilities  LegalLiability[]
   documents         PersonDocument[]
+  financialChanges  FinancialChange[]
 
   // Qeydiyyat və arxiv (soft delete) — kim, nə vaxt
   createdById String?
@@ -357,8 +387,9 @@ model Employment {
   terminationDate    DateTime? @db.Date
   terminationArticle String? // AR ƏM maddəsi
 
-  salaryHistory SalaryRecord[]
-  movements     EmploymentMovement[]
+  salaryHistory    SalaryRecord[]
+  movements        EmploymentMovement[]
+  financialChanges FinancialChange[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -448,12 +479,14 @@ model SalaryRecord {
 /// (Hərəkət hesabatı buradan oxuyur). null — həmin sahə dəyişməyib. Adlar snapshot kimi saxlanılır:
 /// bölmə / vəzifə sonradan adını dəyişsə və ya bağlansa da tarixçə oxunaqlı qalır.
 model EmploymentMovement {
-  id               String     @id @default(cuid())
+  id               String        @id @default(cuid())
   employmentId     String
-  employment       Employment @relation(fields: [employmentId], references: [id], onDelete: Cascade)
+  employment       Employment    @relation(fields: [employmentId], references: [id], onDelete: Cascade)
   orderNumber      String // əmrin nömrəsi
-  orderDate        DateTime   @db.Date // əmrin tarixi
-  effectiveDate    DateTime   @db.Date // qüvvəyə minmə tarixi
+  orderDate        DateTime      @db.Date // əmrin tarixi
+  effectiveDate    DateTime      @db.Date // qüvvəyə minmə tarixi
+  /// Əmrdə göstərilən növ; null — köhnə qeyd (növ from/to-ya əsasən təxmin edilir)
+  kind             MovementKind?
   fromDepartmentId String?
   fromDepartment   String?
   toDepartmentId   String?
@@ -462,18 +495,52 @@ model EmploymentMovement {
   fromPosition     String?
   toPositionId     String?
   toPosition       String?
-  fromSalary       Decimal?   @db.Decimal(12, 2)
-  toSalary         Decimal?   @db.Decimal(12, 2)
-  fromUnitShare    Decimal?   @db.Decimal(4, 2)
-  toUnitShare      Decimal?   @db.Decimal(4, 2)
+  fromSalary       Decimal?      @db.Decimal(12, 2)
+  toSalary         Decimal?      @db.Decimal(12, 2)
+  fromUnitShare    Decimal?      @db.Decimal(4, 2)
+  toUnitShare      Decimal?      @db.Decimal(4, 2)
   note             String?
   createdById      String?
-  createdBy        User?      @relation("MovementCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy        User?         @relation("MovementCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  financialChanges FinancialChange[]
 
   createdAt DateTime @default(now())
 
   @@index([employmentId, effectiveDate])
   @@index([effectiveDate])
+}
+
+/// Maliyyə tarixçəsi — əməkhaqqına təsir edən sahənin hər dəyişikliyi (köhnə → yeni), hansı yoldan edilirsə edilsin
+/// (hərəkət forması, tam forma, sürətli redaktə, idxal). «Tarixə görə baxış» cari vəziyyətdən başlayıb qüvvəyə minmə
+/// tarixi seçilmiş tarixdən sonra olan dəyişiklikləri geri açır. value — maşın dəyəri (rəqəm, id, mətn), label — oxunaqlı ad.
+/// Bu cədvəldən əvvəlki tarixçə oxuma zamanı EmploymentMovement və SalaryRecord-dan bərpa olunur.
+model FinancialChange {
+  id            String              @id @default(cuid())
+  personId      String
+  person        Person              @relation(fields: [personId], references: [id], onDelete: Cascade)
+  /// null — şəxs səviyyəli sahə (vergi güzəşti, elmi dərəcə / ad)
+  employmentId  String?
+  employment    Employment?         @relation(fields: [employmentId], references: [id], onDelete: Cascade)
+  field         FinanceField
+  oldValue      String?
+  newValue      String?
+  oldLabel      String?
+  newLabel      String?
+  effectiveDate DateTime            @db.Date
+  source        FinanceSource
+  orderNumber   String?
+  orderDate     DateTime?           @db.Date
+  movementId    String?
+  movement      EmploymentMovement? @relation(fields: [movementId], references: [id], onDelete: SetNull)
+  createdById   String?
+  createdBy     User?               @relation("FinancialChangeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([personId, effectiveDate])
+  @@index([employmentId, effectiveDate])
+  @@index([movementId])
 }
 
 // ----------------------------------------------------------------------------
@@ -783,13 +850,25 @@ model LeaveBalance {
 }
 
 /// 9 İşdə iştirak etməmə.xlsx
+/// Əmr əsasında daxil edilən ödənişsiz məzuniyyət (dosyedə) — orderNumber doludur; idxal bu qeydlərə toxunmur.
+/// Ləğv: qeyd silinmir, cancelledAt yazılır (staj, nişan, hesabat ləğv edilənləri nəzərə almır).
 model Absence {
-  id        String      @id @default(cuid())
-  personId  String
-  person    Person      @relation(fields: [personId], references: [id], onDelete: Cascade)
-  type      AbsenceType
-  startDate DateTime    @db.Date
-  endDate   DateTime    @db.Date
+  id            String      @id @default(cuid())
+  personId      String
+  person        Person      @relation(fields: [personId], references: [id], onDelete: Cascade)
+  type          AbsenceType
+  startDate     DateTime    @db.Date
+  endDate       DateTime    @db.Date
+  orderNumber   String?
+  orderDate     DateTime?   @db.Date
+  note          String?
+  createdById   String?
+  createdBy     User?       @relation("AbsenceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime    @default(now())
+  cancelledAt   DateTime?
+  cancelledById String?
+  cancelledBy   User?       @relation("AbsenceCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  cancelReason  String?
 
   @@index([personId, startDate])
 }
@@ -893,6 +972,9 @@ model User {
   deletionRequests  DocumentDeletionRequest[] @relation("DeletionRequestedBy")
   deletionDecisions DocumentDeletionRequest[] @relation("DeletionDecidedBy")
   movementsCreated  EmploymentMovement[]      @relation("MovementCreatedBy")
+  financialChanges  FinancialChange[]         @relation("FinancialChangeCreatedBy")
+  absencesCreated   Absence[]                 @relation("AbsenceCreatedBy")
+  absencesCancelled Absence[]                 @relation("AbsenceCancelledBy")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

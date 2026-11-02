@@ -8,6 +8,10 @@ import { assertUser } from "@/lib/auth/session";
 import { audit, diff, snapshot } from "@/lib/audit";
 import { DELETE_CONFIRM_WORD, matchesConfirmWord } from "@/lib/confirm";
 import { prisma } from "@/lib/db";
+import { logFinanceChanges, todayUtc } from "@/lib/finance-log";
+import { ORDER_LEAVE_TYPES } from "@/lib/leave-rules";
+import { applyLeave, cancelLeave } from "@/lib/leaves";
+import { MOVEMENT_KINDS } from "@/lib/movement-rules";
 import { applyMovement, MovementError } from "@/lib/movements";
 import { finCode, optEmail } from "@/lib/validation/primitives";
 
@@ -31,6 +35,8 @@ const isoDate = z
   .refine((d) => !Number.isNaN(d.getTime()), "Tarix yanlışdır");
 const reqDate = (label: string) => z.preprocess(blank, z.string({ required_error: `${label} boş ola bilməz` }).pipe(isoDate));
 const optDate = z.preprocess(blank, isoDate.optional());
+/** Hərəkətin növü: boş — dəyişikliyə görə avtomatik */
+const optKind = z.preprocess(blank, z.enum(MOVEMENT_KINDS, { errorMap: () => ({ message: "Hərəkətin növünü seçin" }) }).optional());
 
 const formSchema = z
   .object({
@@ -73,6 +79,7 @@ const formSchema = z
     orderNumber: z.preprocess(blank, z.string().trim().max(64).optional()),
     orderDate: optDate,
     effectiveDate: optDate,
+    movementKind: optKind,
   })
   .superRefine((v, ctx) => {
     const today = new Date();
@@ -232,9 +239,13 @@ export async function savePersonAction(_prev: PersonFormState, form: FormData): 
             if (!v.orderDate) missing.push(["orderDate", "Əmrin tarixini daxil edin"]);
             if (!v.effectiveDate) missing.push(["effectiveDate", "Qüvvəyə minmə tarixini daxil edin"]);
             if (missing.length) throw new FieldsError("Bölmə, vəzifə, oklad və ya ştat payı dəyişir — əmrin məlumatlarını daxil edin", Object.fromEntries(missing));
-            await applyMovement(tx, user, {
+            await applyMovement(
+              tx,
+              user,
+              {
               personId: v.id,
               employmentId: current.id,
+              kind: v.movementKind,
               orderNumber: v.orderNumber!,
               orderDate: v.orderDate!,
               effectiveDate: v.effectiveDate!,
@@ -242,10 +253,16 @@ export async function savePersonAction(_prev: PersonFormState, form: FormData): 
               positionId,
               baseSalary,
               unitShare,
-            });
+              },
+              "EDIT",
+            );
           }
           for (const [k, pair] of Object.entries(diff(Object.fromEntries(Object.keys(rest).map((k) => [k, current[k as keyof typeof current]])), rest)))
             changes[`employment.${k}`] = pair;
+          // Ödəniş forması əmrsiz redaktə olunur — maliyyə tarixçəsinə bu gündən qüvvədə kimi yazılır
+          await logFinanceChanges(tx, { personId: v.id, employmentId: current.id, effectiveDate: todayUtc(), source: "EDIT", userId: user.id }, [
+            { field: "PAYMENT_FORM", oldValue: current.paymentForm, newValue: rest.paymentForm },
+          ]);
           await tx.employment.update({ where: { id: current.id }, data: rest });
         } else {
           await tx.employment.create({ data: { personId: v.id, ...emp, salaryHistory: { create: { baseSalary: emp.baseSalary, validFrom: emp.hireDate } } } });
@@ -335,6 +352,7 @@ const quickSchema = z.object({
   orderNumber: z.preprocess(blank, z.string().trim().max(64).optional()),
   orderDate: optDate,
   effectiveDate: optDate,
+  movementKind: optKind,
   mobilePhone: optStr,
   workPhone: optStr,
   email: optEmail,
@@ -381,17 +399,23 @@ export async function quickUpdatePersonAction(_prev: QuickEditState, form: FormD
         if (!v.orderDate) missing.push(["orderDate", "Əmrin tarixini daxil edin"]);
         if (!v.effectiveDate) missing.push(["effectiveDate", "Qüvvəyə minmə tarixini daxil edin"]);
         if (missing.length) throw new FieldsError("Bölmə, vəzifə, oklad və ya ştat payı dəyişir — əmrin məlumatlarını daxil edin", Object.fromEntries(missing));
-        await applyMovement(tx, user, {
-          personId: v.personId,
-          employmentId: emp.id,
-          orderNumber: v.orderNumber!,
-          orderDate: v.orderDate!,
-          effectiveDate: v.effectiveDate!,
-          departmentId: v.departmentId,
-          positionId: v.positionId,
-          baseSalary: v.baseSalary,
-          unitShare: v.unitShare,
-        });
+        await applyMovement(
+          tx,
+          user,
+          {
+            personId: v.personId,
+            employmentId: emp.id,
+            kind: v.movementKind,
+            orderNumber: v.orderNumber!,
+            orderDate: v.orderDate!,
+            effectiveDate: v.effectiveDate!,
+            departmentId: v.departmentId,
+            positionId: v.positionId,
+            baseSalary: v.baseSalary,
+            unitShare: v.unitShare,
+          },
+          "QUICK_EDIT",
+        );
       }
       if (Object.keys(changes).length === 0) return;
       await audit(
@@ -433,6 +457,7 @@ const movementSchema = z.object({
   personId: z.string().min(1),
   employmentId: reqStr("Müqavilə"),
   updatedAt: optStr,
+  movementKind: z.preprocess(blank, z.enum(MOVEMENT_KINDS, { errorMap: () => ({ message: "Hərəkətin növünü seçin" }) })),
   orderNumber: z.preprocess(blank, z.string({ required_error: "Əmrin nömrəsini daxil edin" }).trim().min(1, "Əmrin nömrəsini daxil edin").max(64)),
   orderDate: reqDate("Əmrin tarixi"),
   effectiveDate: reqDate("Qüvvəyə minmə tarixi"),
@@ -458,6 +483,7 @@ export async function recordMovementAction(_prev: MovementFormState, form: FormD
         personId: v.personId,
         employmentId: v.employmentId,
         expectedUpdatedAt: v.updatedAt,
+        kind: v.movementKind,
         orderNumber: v.orderNumber,
         orderDate: v.orderDate,
         effectiveDate: v.effectiveDate,
@@ -476,5 +502,76 @@ export async function recordMovementAction(_prev: MovementFormState, form: FormD
   revalidatePath("/employees");
   revalidatePath(`/employees/${v.personId}`);
   revalidatePath("/org-chart");
+  return { ok: true };
+}
+
+// ----------------------------------------------------------------------------
+//  Ödənişsiz məzuniyyət (ö/m, ö/sm) — əmr əsasında; ləğv — audit ilə
+// ----------------------------------------------------------------------------
+
+const leaveSchema = z.object({
+  personId: z.string().min(1),
+  updatedAt: optStr,
+  type: z.enum(ORDER_LEAVE_TYPES, { errorMap: () => ({ message: "Məzuniyyətin növünü seçin" }) }),
+  orderNumber: z.preprocess(blank, z.string({ required_error: "Əmrin nömrəsini daxil edin" }).trim().min(1, "Əmrin nömrəsini daxil edin").max(64)),
+  orderDate: reqDate("Əmrin tarixi"),
+  startDate: reqDate("Başlama tarixi"),
+  endDate: reqDate("Bitmə tarixi"),
+  note: optStr,
+});
+
+export async function recordLeaveAction(_prev: MovementFormState, form: FormData): Promise<MovementFormState> {
+  const user = await assertUser("employees.edit");
+  const parsed = leaveSchema.safeParse(Object.fromEntries(form));
+  if (!parsed.success) {
+    const fieldErrors: Record<string, string> = {};
+    for (const i of parsed.error.issues) fieldErrors[String(i.path[0])] ??= i.message;
+    return { error: "Formada xətalar var", fieldErrors };
+  }
+  const v = parsed.data;
+  try {
+    await prisma.$transaction((tx) =>
+      applyLeave(tx, user, {
+        personId: v.personId,
+        expectedUpdatedAt: v.updatedAt,
+        type: v.type,
+        orderNumber: v.orderNumber,
+        orderDate: v.orderDate,
+        startDate: v.startDate,
+        endDate: v.endDate,
+        note: v.note,
+      }),
+    );
+  } catch (e) {
+    if (e instanceof MovementError) return { error: e.message, fieldErrors: e.field ? { [e.field]: e.message } : undefined };
+    return { error: e instanceof Error ? e.message : "Yadda saxlamaq alınmadı" };
+  }
+  revalidatePath("/employees");
+  revalidatePath(`/employees/${v.personId}`);
+  return { ok: true };
+}
+
+const cancelSchema = z.object({
+  absenceId: z.string().min(1),
+  reason: z.preprocess(blank, z.string({ required_error: "Ləğvin səbəbini yazın" }).trim().min(3, "Ləğvin səbəbini yazın").max(300)),
+});
+
+export async function cancelLeaveAction(_prev: MovementFormState, form: FormData): Promise<MovementFormState> {
+  const user = await assertUser("employees.edit");
+  const parsed = cancelSchema.safeParse(Object.fromEntries(form));
+  if (!parsed.success) {
+    const fieldErrors: Record<string, string> = {};
+    for (const i of parsed.error.issues) fieldErrors[String(i.path[0])] ??= i.message;
+    return { error: "Formada xətalar var", fieldErrors };
+  }
+  let personId: string;
+  try {
+    ({ personId } = await prisma.$transaction((tx) => cancelLeave(tx, user, parsed.data.absenceId, parsed.data.reason)));
+  } catch (e) {
+    if (e instanceof MovementError) return { error: e.message };
+    return { error: e instanceof Error ? e.message : "Ləğv etmək alınmadı" };
+  }
+  revalidatePath("/employees");
+  revalidatePath(`/employees/${personId}`);
   return { ok: true };
 }

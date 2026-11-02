@@ -769,6 +769,9 @@ export function OrgChart({
         ref={viewport}
         className="relative h-[calc(100dvh-230px)] min-h-[480px] cursor-grab touch-none overflow-hidden bg-[radial-gradient(var(--border)_1px,transparent_1px)] [background-size:22px_22px] select-none active:cursor-grabbing"
         onPointerDown={(e) => {
+          // Portal-dakı elementlər (panelin Select siyahısı) React ağacında buraya «bubble» edir — pointer capture
+          // seçimi pozur (pointerup variantın yerinə bura düşür). DOM-da viewport-a aid olmayan hədəf — yalnız keçirik.
+          if (!(e.currentTarget as HTMLElement).contains(e.target as Node)) return;
           if ((e.target as HTMLElement).closest("button, a, input, [data-panel]")) return;
           panDrag.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
           (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);

@@ -16,6 +16,7 @@ import {
   type SheetRow,
 } from "../validation/templates";
 import { PERSON_GROUP_BLOCKED, type FieldIssue, type RawRow, type SheetKey } from "../validation/types";
+import { logFinanceChanges, moneyValue, pctValue, todayUtc } from "../finance-log";
 import { emit } from "./progress";
 import { STAGE_ORDER } from "./validator";
 
@@ -116,8 +117,17 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups): Promise<void> {
         validFrom: r.validFrom,
         validTo: r.validTo ?? null,
       };
+      const before = await tx.position.findUnique({ where: { code: r.code }, select: { id: true, hazardousAllowancePct: true } });
       const p = await tx.position.upsert({ where: { code: r.code }, create: { code: r.code, ...data }, update: data, select: { id: true } });
       lk.positions.set(r.code, p.id);
+      // Zərərli şərait faizi vəzifədən gəlir — dəyişibsə, həmin vəzifədəki hər aktiv müqavilənin maliyyə tarixçəsinə
+      if (before && pctValue(before.hazardousAllowancePct) !== pctValue(data.hazardousAllowancePct)) {
+        const emps = await tx.employment.findMany({ where: { positionId: p.id, status: { not: "TERMINATED" } }, select: { id: true, personId: true } });
+        for (const e of emps)
+          await logFinanceChanges(tx, { personId: e.personId, employmentId: e.id, effectiveDate: todayUtc(), source: "IMPORT", userId: lk.userId }, [
+            { field: "HAZARDOUS_PCT", oldValue: pctValue(before.hazardousAllowancePct), newValue: pctValue(data.hazardousAllowancePct) },
+          ]);
+      }
       return;
     }
     case "staffing": {
@@ -141,6 +151,7 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups): Promise<void> {
         maritalStatus: r.maritalStatus ?? null,
         quotaBasicLeaveDays: r.quotaBasicLeaveDays ?? null,
       };
+      const before = await tx.person.findUnique({ where: { code }, select: { id: true, taxExemptionClause: true } });
       const p = await tx.person.upsert({
         where: { code },
         create: { code, ...data, createdById: lk.userId },
@@ -148,6 +159,11 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups): Promise<void> {
         select: { id: true },
       });
       lk.persons.set(code, p.id);
+      // Boş xana (undefined) mövcud güzəşti dəyişmir — yalnız dəyər verilibsə müqayisə olunur
+      if (before && data.taxExemptionClause !== undefined)
+        await logFinanceChanges(tx, { personId: p.id, employmentId: null, effectiveDate: todayUtc(), source: "IMPORT", userId: lk.userId }, [
+          { field: "TAX_EXEMPTION", oldValue: before.taxExemptionClause, newValue: data.taxExemptionClause ?? null },
+        ]);
       return;
     }
     case "employments": {
@@ -156,7 +172,7 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups): Promise<void> {
       const positionId = need(lk.positions, r.positionCode, "Vəzifə");
       const departmentId = need(lk.departments, r.departmentCode, "Bölmə");
       const where = { personId_positionId_departmentId_hireDate: { personId, positionId, departmentId, hireDate: r.hireDate } };
-      const existing = await tx.employment.findUnique({ where, select: { id: true, baseSalary: true } });
+      const existing = await tx.employment.findUnique({ where, select: { id: true, baseSalary: true, unitShare: true, paymentForm: true } });
       const data = { schedule: r.schedule, paymentForm: r.paymentForm, baseSalary: r.baseSalary, unitShare: r.unitShare ?? 1 };
       if (!existing) {
         await tx.employment.create({
@@ -165,9 +181,14 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups): Promise<void> {
         return;
       }
       await tx.employment.update({ where: { id: existing.id }, data });
+      const today = todayUtc();
+      // Maliyyə tarixçəsi: idxal ilə dəyişən oklad / ştat payı / ödəniş forması — idxal günündən qüvvədə
+      await logFinanceChanges(tx, { personId, employmentId: existing.id, effectiveDate: today, source: "IMPORT", userId: lk.userId }, [
+        { field: "BASE_SALARY", oldValue: moneyValue(existing.baseSalary), newValue: moneyValue(r.baseSalary) },
+        { field: "UNIT_SHARE", oldValue: moneyValue(existing.unitShare), newValue: moneyValue(data.unitShare) },
+        { field: "PAYMENT_FORM", oldValue: existing.paymentForm, newValue: data.paymentForm },
+      ]);
       if (Number(existing.baseSalary) !== r.baseSalary) {
-        const now = new Date();
-        const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
         await tx.salaryRecord.updateMany({ where: { employmentId: existing.id, validTo: null }, data: { validTo: new Date(today.getTime() - 86_400_000) } });
         await tx.salaryRecord.create({ data: { employmentId: existing.id, baseSalary: r.baseSalary, validFrom: today } });
       }
@@ -202,11 +223,18 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups): Promise<void> {
 //  Şəxs üzrə atomik əvəzetmə (siyahı tipli vərəqlər)
 // ----------------------------------------------------------------------------
 
-async function replacePersonList(tx: Tx, sheet: SheetKey, personId: string, raws: RawRow[], hireDate: Date | null): Promise<void> {
+/** Elmi dərəcə / ad siyahısı dəyişibsə — maliyyə tarixçəsinə (əlavələrə təsir edir) */
+async function logNamesChange(tx: Tx, personId: string, userId: string | null, field: "DEGREE" | "TITLE", before: string[], after: string[]) {
+  const join = (xs: string[]) => (xs.length ? [...xs].sort((a, b) => a.localeCompare(b, "az")).join("; ") : null);
+  await logFinanceChanges(tx, { personId, employmentId: null, effectiveDate: todayUtc(), source: "IMPORT", userId }, [{ field, oldValue: join(before), newValue: join(after) }]);
+}
+
+async function replacePersonList(tx: Tx, sheet: SheetKey, personId: string, raws: RawRow[], hireDate: Date | null, userId: string | null = null): Promise<void> {
   if (isAbsenceSheet(sheet)) {
-    // 3 vərəq eyni cədvələ yazır — hər vərəq yalnız öz növlərini əvəz edir
+    // 3 vərəq eyni cədvələ yazır — hər vərəq yalnız öz növlərini əvəz edir.
+    // Dosyedən əmr ilə daxil edilmiş (orderNumber dolu) məzuniyyətlərə idxal toxunmur.
     const types = Object.values(ABSENCE_SHEETS[sheet].map) as AbsenceType[];
-    await tx.absence.deleteMany({ where: { personId, type: { in: types } } });
+    await tx.absence.deleteMany({ where: { personId, type: { in: types }, orderNumber: null } });
     const rows = raws.map((x) => parse(sheet, x));
     await tx.absence.createMany({ data: rows.map((r) => ({ personId, type: r.type, startDate: r.startDate, endDate: r.endDate })) });
     return;
@@ -305,16 +333,20 @@ async function replacePersonList(tx: Tx, sheet: SheetKey, personId: string, raws
       return;
     }
     case "degrees": {
+      const old = await tx.academicDegree.findMany({ where: { personId }, select: { degreeName: true } });
       await tx.academicDegree.deleteMany({ where: { personId } });
       const rows = raws.map((x) => parse("degrees", x));
+      await logNamesChange(tx, personId, userId, "DEGREE", old.map((d) => d.degreeName), rows.map((r) => r.degreeName));
       await tx.academicDegree.createMany({
         data: rows.map(({ personCode: _p, ...r }) => ({ personId, ...r, degree: classifyDegree(r.degreeName)! })),
       });
       return;
     }
     case "titles": {
+      const old = await tx.academicTitle.findMany({ where: { personId }, select: { titleName: true } });
       await tx.academicTitle.deleteMany({ where: { personId } });
       const rows = raws.map((x) => parse("titles", x));
+      await logNamesChange(tx, personId, userId, "TITLE", old.map((t) => t.titleName), rows.map((r) => r.titleName));
       await tx.academicTitle.createMany({ data: rows.map(({ personCode: _p, ...r }) => ({ personId, ...r, title: classifyTitle(r.titleName)! })) });
       return;
     }
@@ -464,7 +496,7 @@ export async function commitBatch(db: PrismaClient, batchId: string): Promise<{ 
           const ids = group.map((r) => r.id);
           try {
             const personId = need(lk.persons, personCode, "Əməkdaş");
-            await db.$transaction((tx) => replacePersonList(tx, sheet, personId, group.map((r) => r.data), hireDates.get(personCode) ?? null));
+            await db.$transaction((tx) => replacePersonList(tx, sheet, personId, group.map((r) => r.data), hireDates.get(personCode) ?? null, createdBy));
             await markCommitted(db, ids);
             committed += ids.length;
           } catch (e) {

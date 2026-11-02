@@ -16,11 +16,12 @@ export type Permission =
   | "audit.view"
   | "structure.edit" // struktur bölmələrinin əlavəsi, redaktəsi, silinməsi
   | "database.manage" // backup, bərpa, bütün məlumatların silinməsi
-  | "requests.manage"; // sənəd silmə sorğularının təsdiqi / imtinası
+  | "requests.manage" // sənəd silmə sorğularının təsdiqi / imtinası
+  | "finance.history"; // maliyyə tarixçəsi və «tarixə görə» maaş baxışı (şöbə rəhbərində yoxdur)
 
 const GRANTS: Record<UserRole, Permission[]> = {
-  ROOT: ["employees.view", "employees.edit", "structure.edit", "import", "reports", "users.manage", "audit.view", "database.manage", "requests.manage"],
-  HR: ["employees.view", "employees.edit", "structure.edit", "import", "reports"],
+  ROOT: ["employees.view", "employees.edit", "structure.edit", "import", "reports", "users.manage", "audit.view", "database.manage", "requests.manage", "finance.history"],
+  HR: ["employees.view", "employees.edit", "structure.edit", "import", "reports", "finance.history"],
   DEPT_HEAD: ["employees.view", "reports"],
 };
 

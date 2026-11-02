@@ -98,11 +98,21 @@ const columns: ColumnDef<EmployeeRow>[] = [
     id: "status",
     accessorKey: "status",
     header: "Status",
-    size: 112,
+    size: 150,
     filterFn: "equalsString",
-    cell: ({ getValue }) => {
+    cell: ({ getValue, row }) => {
       const s = STATUS[getValue<string>() ?? ""];
-      return s ? <Badge variant={s.variant}>{s.label}</Badge> : <Empty />;
+      const leave = row.original.unpaidLeave;
+      return (
+        <div className="flex flex-col items-start gap-0.5">
+          {s ? <Badge variant={s.variant}>{s.label}</Badge> : <Empty />}
+          {leave && (
+            <Badge variant="warning" className="whitespace-normal" title={`${leave.type === "SOCIAL_UNPAID" ? "Ödənişsiz sosial məzuniyyətdə" : "Ödənişsiz məzuniyyətdə"} (${formatIsoDate(leave.from)} – ${formatIsoDate(leave.to)})`} data-unpaid-leave-badge>
+              {leave.type === "SOCIAL_UNPAID" ? "Ödənişsiz sosial məzuniyyətdə" : "Ödənişsiz məzuniyyətdə"} ({formatIsoDate(leave.from)} – {formatIsoDate(leave.to)})
+            </Badge>
+          )}
+        </div>
+      );
     },
   },
   { id: "hireDate", accessorKey: "hireDate", header: "İşə qəbul", size: 92, cell: DateCell },

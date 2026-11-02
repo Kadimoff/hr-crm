@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/ui/label";
+import type { MovementKindCode } from "@/lib/movement-rules";
 import type { PersonFormOptions } from "@/lib/queries";
 
 export interface MovementEmployment {
@@ -22,7 +23,7 @@ export interface MovementEmployment {
   unitShare: number;
 }
 
-/** Dosyedə «Köçürmə / maaş dəyişikliyi» — əmr nömrəsi, əmr və qüvvəyə minmə tarixi, yeni bölmə / vəzifə / oklad / ştat payı */
+/** Dosyedə «Kadr hərəkəti» — növ (köçürmə, vəzifə artımı, maaş / ştat dəyişikliyi), əmr nömrəsi, əmr və qüvvəyə minmə tarixi, yeni bölmə / vəzifə / oklad / ştat payı */
 export function MovementDialog({ personId, updatedAt, employments, options }: { personId: string; updatedAt: string; employments: MovementEmployment[]; options: PersonFormOptions }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -30,6 +31,7 @@ export function MovementDialog({ personId, updatedAt, employments, options }: { 
   const [empId, setEmpId] = useState(employments[0]?.id ?? "");
   const emp = employments.find((e) => e.id === empId) ?? employments[0];
   const [sel, setSel] = useState({ departmentId: emp?.departmentId ?? "", positionId: emp?.positionId ?? "" });
+  const [kind, setKind] = useState<MovementKindCode | "">("");
 
   useEffect(() => {
     if (!state.ok) return;
@@ -46,12 +48,15 @@ export function MovementDialog({ personId, updatedAt, employments, options }: { 
       open={open}
       onOpenChange={(o) => {
         setOpen(o);
-        if (o) setSel({ departmentId: emp.departmentId, positionId: emp.positionId });
+        if (o) {
+          setSel({ departmentId: emp.departmentId, positionId: emp.positionId });
+          setKind("");
+        }
       }}
     >
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
-          <ArrowRightLeftIcon /> Köçürmə / maaş dəyişikliyi
+          <ArrowRightLeftIcon /> Kadr hərəkəti
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
@@ -68,9 +73,9 @@ export function MovementDialog({ personId, updatedAt, employments, options }: { 
           <input type="hidden" name="personId" value={personId} />
           <input type="hidden" name="updatedAt" value={updatedAt} />
           <DialogHeader>
-            <DialogTitle>Köçürmə / maaş dəyişikliyi</DialogTitle>
+            <DialogTitle>Kadr hərəkəti: köçürmə, vəzifə artımı, maaş dəyişikliyi</DialogTitle>
             <DialogDescription>
-              Əmr əsasında: müqavilə yeni vəziyyətə keçir, əvvəlki dəyərlər kadr hərəkətləri tarixçəsində saxlanılır, oklad tarixçəsi qüvvəyə minmə tarixindən yenilənir.
+              Əmr əsasında: müqavilə yeni vəziyyətə keçir, əvvəlki dəyərlər kadr hərəkətləri və maliyyə tarixçəsində saxlanılır, oklad tarixçəsi qüvvəyə minmə tarixindən yenilənir.
             </DialogDescription>
           </DialogHeader>
           {employments.length > 1 ? (
@@ -90,12 +95,17 @@ export function MovementDialog({ personId, updatedAt, employments, options }: { 
           ) : (
             <input type="hidden" name="employmentId" value={emp.id} />
           )}
-          <MovementOrderFields fe={fe} notice={false} />
+          <MovementOrderFields fe={fe} notice={false} kind={{ value: kind, onChange: setKind }} />
+          {kind === "PROMOTION" && (
+            <p className="-mt-1 text-xs text-muted-foreground" data-promotion-hint>
+              Vəzifə artımında <b>yeni vəzifə məcburidir</b>; adətən yeni oklad da daxil edilir.
+            </p>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <FormField label="Struktur bölmə" htmlFor="departmentId" error={fe.departmentId} required>
               <FormSelect name="departmentId" value={sel.departmentId} onChange={(v) => setSel((s) => ({ ...s, departmentId: v }))} options={options.departments} placeholder="Seçin" invalid={!!fe.departmentId} />
             </FormField>
-            <FormField label="Vəzifə" htmlFor="positionId" error={fe.positionId} required>
+            <FormField label={kind === "PROMOTION" ? "Yeni vəzifə" : "Vəzifə"} htmlFor="positionId" error={fe.positionId} required>
               <FormSelect name="positionId" value={sel.positionId} onChange={(v) => setSel((s) => ({ ...s, positionId: v }))} options={options.positions} placeholder="Seçin" invalid={!!fe.positionId} />
             </FormField>
             <FormField label="Oklad (₼)" htmlFor="baseSalary" error={fe.baseSalary} required>

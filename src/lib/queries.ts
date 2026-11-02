@@ -3,6 +3,19 @@ import type { Prisma, StaffCategory } from "@prisma/client";
 import { computeLeaveEntitlement, workYearContaining } from "./calc/leave";
 import { computePayroll, primaryEmploymentIds, type PayrollInput } from "./calc/payroll";
 import { computeSeniority, todayUtc } from "./calc/seniority";
+import {
+  deriveLegacyEvents,
+  financialSnapshotAt,
+  formatFinanceValue,
+  newestFirst,
+  num2,
+  type EmploymentNow,
+  type FinanceEvent,
+  type FinanceFieldCode,
+  type FinanceSourceCode,
+  type PersonNow,
+} from "./finance-history";
+import { activeUnpaidLeave } from "./leave-rules";
 import { personScopeWhere } from "./auth/scope";
 import { UNIT_GROUPS, type UnitGroup, type UnitNode } from "./personnel";
 import { prisma } from "./db";
@@ -125,6 +138,8 @@ export async function getEmployeeRows(scope: string[] | null = null, opts: { arc
       mobilePhone: true,
       academicDegrees: { select: { degree: true } },
       academicTitles: { select: { title: true } },
+      // Bu gün davam edən ödənişsiz məzuniyyət — siyahıda nişan
+      absences: { where: { cancelledAt: null, type: { in: ["UNPAID", "SOCIAL_UNPAID"] }, startDate: { lte: todayUtc() }, endDate: { gte: todayUtc() } }, select: { type: true, startDate: true, endDate: true }, take: 1 },
       employments: {
         where: match,
         orderBy: [{ isPrimary: "desc" }, { hireDate: "desc" }],
@@ -162,6 +177,9 @@ export async function getEmployeeRows(scope: string[] | null = null, opts: { arc
       deletedAt: p.deletedAt?.toISOString() ?? null,
       degree: p.academicDegrees.some((d) => d.degree === "DSC") ? "Elmlər doktoru" : p.academicDegrees.length ? "Fəlsəfə doktoru" : null,
       title: p.academicTitles.some((t) => t.title === "PROFESSOR") ? "Professor" : p.academicTitles.some((t) => t.title === "DOCENT") ? "Dosent" : null,
+      unpaidLeave: p.absences[0]
+        ? { type: p.absences[0].type as "UNPAID" | "SOCIAL_UNPAID", from: p.absences[0].startDate.toISOString(), to: p.absences[0].endDate.toISOString() }
+        : null,
     };
   });
 }
@@ -193,7 +211,7 @@ export async function getDossier(id: string) {
       disabilities: { orderBy: { issueDate: "desc" } },
       familyMembers: { orderBy: { birthDate: "asc" } },
       leaveBalances: { orderBy: { periodStart: "desc" } },
-      absences: { orderBy: { startDate: "desc" } },
+      absences: { orderBy: { startDate: "desc" }, include: { createdBy: { select: { fullName: true } }, cancelledBy: { select: { fullName: true } } } },
       intellectualProps: true,
       projects: { orderBy: { startDate: "desc" } },
       events: { orderBy: { date: "desc" } },
@@ -225,7 +243,8 @@ export async function getDossier(id: string) {
   const seniority = computeSeniority(
     { years: p.laborSeniorityYears, months: p.laborSeniorityMonths, days: p.laborSeniorityDays },
     p.employments.map((e) => ({ start: e.hireDate, end: e.terminationDate })),
-    p.absences.filter((a) => a.type === "UNPAID").map((a) => ({ start: a.startDate, end: a.endDate })),
+    // Ləğv edilmiş əmrli məzuniyyət stajdan çıxılmır
+    p.absences.filter((a) => a.type === "UNPAID" && !a.cancelledAt).map((a) => ({ start: a.startDate, end: a.endDate })),
     today,
   );
 
@@ -263,7 +282,7 @@ export async function getDossier(id: string) {
     0,
   );
 
-  return { person: p, main, seniority, leave, payroll, carryover };
+  return { person: p, main, seniority, leave, payroll, carryover, unpaidLeave: activeUnpaidLeave(p.absences, today) };
 }
 
 export type Dossier = NonNullable<Awaited<ReturnType<typeof getDossier>>>;
@@ -504,3 +523,182 @@ export async function getPersonFormValues(id: string): Promise<Record<string, st
     terminationArticle: main?.terminationArticle ?? "",
   };
 }
+
+// ----------------------------------------------------------------------------
+//  Maliyyə tarixçəsi — zaman xətti və «tarixə görə baxış»
+//  Çağıran tərəf icazəni (finance.history) yoxlamalıdır
+// ----------------------------------------------------------------------------
+
+export interface FinanceTimelineRow {
+  key: string;
+  date: Date;
+  field: FinanceFieldCode | "HIRE" | "TERMINATION";
+  employment: string | null;
+  oldText: string | null;
+  newText: string | null;
+  oldValue: string | null;
+  newValue: string | null;
+  oldLabel: string | null;
+  newLabel: string | null;
+  source: FinanceSourceCode | "HIRE" | "TERMINATION";
+  orderNumber: string | null;
+  orderDate: Date | null;
+  by: string | null;
+  createdAt: Date | null;
+  derived: boolean;
+}
+
+/** asOf — «tarixə görə baxış» günü (null — yalnız zaman xətti) */
+export async function getFinanceHistory(personId: string, asOf: Date | null) {
+  const p = await prisma.person.findUnique({
+    where: { id: personId },
+    select: {
+      taxExemptionClause: true,
+      academicDegrees: { select: { degree: true, degreeName: true, awardDate: true } },
+      academicTitles: { select: { title: true, titleName: true, awardDate: true } },
+      financialChanges: { include: { createdBy: { select: { fullName: true } } } },
+      employments: {
+        orderBy: { hireDate: "asc" },
+        include: {
+          department: { select: { name: true } },
+          position: { select: { name: true } },
+          salaryHistory: { orderBy: { validFrom: "asc" } },
+          movements: { include: { createdBy: { select: { fullName: true } } } },
+        },
+      },
+    },
+  });
+  if (!p) return null;
+  const positions = await prisma.position.findMany({ select: { id: true, hazardousAllowancePct: true } });
+  const positionPct = new Map(positions.map((x) => [x.id, x.hazardousAllowancePct === null ? null : Number(x.hazardousAllowancePct)]));
+
+  const emps: EmploymentNow[] = p.employments.map((e) => ({
+    id: e.id,
+    hireDate: e.hireDate,
+    terminationDate: e.terminationDate,
+    isPrimary: e.isPrimary,
+    departmentId: e.departmentId,
+    departmentName: e.department.name,
+    positionId: e.positionId,
+    positionName: e.position.name,
+    baseSalary: Number(e.baseSalary),
+    unitShare: Number(e.unitShare),
+    paymentForm: e.paymentForm,
+    salaryHistory: e.salaryHistory.map((r) => ({ baseSalary: Number(r.baseSalary), validFrom: r.validFrom, validTo: r.validTo })),
+    movements: e.movements.map((m) => ({
+      id: m.id,
+      orderNumber: m.orderNumber,
+      orderDate: m.orderDate,
+      effectiveDate: m.effectiveDate,
+      fromDepartmentId: m.fromDepartmentId,
+      fromDepartment: m.fromDepartment,
+      toDepartmentId: m.toDepartmentId,
+      toDepartment: m.toDepartment,
+      fromPositionId: m.fromPositionId,
+      fromPosition: m.fromPosition,
+      toPositionId: m.toPositionId,
+      toPosition: m.toPosition,
+      fromSalary: m.fromSalary === null ? null : Number(m.fromSalary),
+      toSalary: m.toSalary === null ? null : Number(m.toSalary),
+      fromUnitShare: m.fromUnitShare === null ? null : Number(m.fromUnitShare),
+      toUnitShare: m.toUnitShare === null ? null : Number(m.toUnitShare),
+      createdAt: m.createdAt,
+      by: m.createdBy?.fullName ?? null,
+    })),
+  }));
+  const explicit: FinanceEvent[] = p.financialChanges.map((c) => ({
+    key: c.id,
+    employmentId: c.employmentId,
+    field: c.field,
+    oldValue: c.oldValue,
+    newValue: c.newValue,
+    oldLabel: c.oldLabel,
+    newLabel: c.newLabel,
+    effectiveDate: c.effectiveDate,
+    source: c.source,
+    orderNumber: c.orderNumber,
+    orderDate: c.orderDate,
+    by: c.createdBy?.fullName ?? null,
+    createdAt: c.createdAt,
+    derived: false,
+  }));
+  const linked = new Set(p.financialChanges.map((c) => c.movementId).filter((x): x is string => !!x));
+  const events = [...explicit, ...deriveLegacyEvents(emps, explicit, linked)];
+  const personNow: PersonNow = {
+    taxExemptionClause: p.taxExemptionClause,
+    degrees: p.academicDegrees.map((d) => ({ degree: d.degree, name: d.degreeName, awardDate: d.awardDate })),
+    titles: p.academicTitles.map((t) => ({ title: t.title, name: t.titleName, awardDate: t.awardDate })),
+  };
+
+  const label = new Map(emps.map((e) => [e.id, `${e.positionName} · ${e.departmentName}${e.isPrimary ? "" : " (əvəzçilik)"}`]));
+  const timeline: FinanceTimelineRow[] = [
+    ...events.sort(newestFirst).map((ev) => ({
+      key: ev.key,
+      date: ev.effectiveDate,
+      field: ev.field,
+      employment: ev.employmentId ? (label.get(ev.employmentId) ?? null) : null,
+      oldText: null,
+      newText: null,
+      oldValue: ev.oldValue,
+      newValue: ev.newValue,
+      oldLabel: ev.oldLabel,
+      newLabel: ev.newLabel,
+      source: ev.source,
+      orderNumber: ev.orderNumber,
+      orderDate: ev.orderDate,
+      by: ev.by,
+      createdAt: ev.derived && ev.source === "SALARY_RECORD" ? null : ev.createdAt,
+      derived: ev.derived,
+    })),
+    // İşə qəbul: ilkin vəziyyət — bütün sonrakı dəyişikliklər geri açılmaqla
+    ...emps.map((e) => {
+      const s = financialSnapshotAt(personNow, [e], events, e.hireDate, positionPct).employments[0];
+      return {
+        key: `hire:${e.id}`,
+        date: e.hireDate,
+        field: "HIRE" as const,
+        employment: label.get(e.id) ?? null,
+        oldText: null,
+        newText: s ? `${s.positionName} · ${s.departmentName}; oklad ${formatFinanceValue("BASE_SALARY", num2(s.baseSalary), null)}; ştat ${formatFinanceValue("UNIT_SHARE", num2(s.unitShare), null)}; ${s.paymentForm}` : null,
+        oldValue: null,
+        newValue: null,
+        oldLabel: null,
+        newLabel: null,
+        source: "HIRE" as const,
+        orderNumber: null,
+        orderDate: null,
+        by: null,
+        createdAt: null,
+        derived: false,
+      };
+    }),
+    ...emps
+      .filter((e) => e.terminationDate)
+      .map((e) => ({
+        key: `term:${e.id}`,
+        date: e.terminationDate!,
+        field: "TERMINATION" as const,
+        employment: label.get(e.id) ?? null,
+        oldText: null,
+        newText: "Müqavilə xitam edildi — oklad dayandırıldı",
+        oldValue: null,
+        newValue: null,
+        oldLabel: null,
+        newLabel: null,
+        source: "TERMINATION" as const,
+        orderNumber: null,
+        orderDate: null,
+        by: null,
+        createdAt: null,
+        derived: false,
+      })),
+  ].sort((a, b) => b.date.getTime() - a.date.getTime() || (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0));
+
+  return {
+    timeline,
+    snapshot: asOf ? financialSnapshotAt(personNow, emps, events, asOf, positionPct) : null,
+    salaryHistory: p.employments.map((e) => ({ employment: label.get(e.id) ?? "", records: [...e.salaryHistory].reverse() })).filter((x) => x.records.length > 0),
+  };
+}
+
+export type FinanceHistory = NonNullable<Awaited<ReturnType<typeof getFinanceHistory>>>;
