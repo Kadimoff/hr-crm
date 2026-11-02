@@ -7,7 +7,7 @@ import { PersonToolbar, SavedToast } from "@/components/employee/person-actions"
 import { can, canDeleteDocumentsDirectly } from "@/lib/auth/roles";
 import { canAccessPerson } from "@/lib/auth/scope";
 import { requireUser } from "@/lib/auth/session";
-import { getDossier } from "@/lib/queries";
+import { getDossier, getPersonFormOptions } from "@/lib/queries";
 import { formatDateTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +26,8 @@ export default async function EmployeePage({ params, searchParams }: { params: P
   // Arxivdəki qeydləri yalnız redaktə hüququ olanlar görür; şöbə rəhbəri yalnız öz bölməsini
   if (!data || (data.person.deletedAt && !canEdit) || !(data.person.deletedAt || (await canAccessPerson(user, id)))) notFound();
   const p = data.person;
+  // Köçürmə / maaş dəyişikliyi forması üçün bölmə və vəzifə siyahıları — yalnız redaktə hüququ olanlara
+  const movementOptions = canEdit && !p.deletedAt ? await getPersonFormOptions() : undefined;
 
   return (
     <>
@@ -46,7 +48,7 @@ export default async function EmployeePage({ params, searchParams }: { params: P
           </div>
         </div>
       )}
-      <EmployeeDossier data={data} canEdit={canEdit} canDelete={canDeleteDocumentsDirectly(user)} tab={(await searchParams).tab} />
+      <EmployeeDossier data={data} canEdit={canEdit} canDelete={canDeleteDocumentsDirectly(user)} tab={(await searchParams).tab} movementOptions={movementOptions} />
       <p className="mt-6 text-xs text-muted-foreground">
         Qeydiyyata alan: {p.createdBy ? `${p.createdBy.fullName} (@${p.createdBy.username})` : "idxal / sistem"} · {formatDateTime(p.createdAt)}
         {p.updatedBy && ` — son dəyişiklik: ${p.updatedBy.fullName} (@${p.updatedBy.username}) · ${formatDateTime(p.updatedAt)}`}

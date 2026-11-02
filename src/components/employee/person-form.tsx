@@ -4,6 +4,7 @@ import { BriefcaseIcon, IdCardIcon, PhoneIcon, SaveIcon, UserIcon } from "lucide
 import Link from "next/link";
 import { startTransition, useActionState, useEffect, useState } from "react";
 import { savePersonAction } from "@/actions/persons";
+import { MovementOrderFields } from "@/components/employee/movement-fields";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DateInput } from "@/components/ui/date-input";
@@ -38,7 +39,7 @@ const STATUS: Option[] = [
 ];
 
 /** Forma ilə göndərilən select: dəyər gizli input-da saxlanılır (Radix boş dəyəri qəbul etmir) */
-function FormSelect({
+export function FormSelect({
   name,
   value,
   onChange,
@@ -109,6 +110,16 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
     positionId: v("positionId"),
     status: v("status") || "ACTIVE",
   });
+  // Mövcud müqavilədə bölmə / vəzifə / oklad / ştat payı dəyişəndə əmr sahələri göstərilir (kadr hərəkəti)
+  const [job, setJob] = useState({ baseSalary: v("baseSalary"), unitShare: v("unitShare") });
+  const hasEmployment = editing && !!v("employmentId");
+  const num = (s: string, fallback: number) => (s.trim() === "" ? fallback : Number(s));
+  const jobChanged =
+    hasEmployment &&
+    (selects.departmentId !== v("departmentId") ||
+      selects.positionId !== v("positionId") ||
+      num(job.baseSalary, NaN) !== num(v("baseSalary"), NaN) ||
+      num(job.unitShare, 1) !== num(v("unitShare"), 1));
   const set = (k: string) => (val: string) => {
     setSelects((s) => ({ ...s, [k]: val }));
     touch(k);
@@ -183,7 +194,15 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
         {field("livingAddress", "Faktiki ünvan")}
       </Section>
 
-      <Section icon={BriefcaseIcon} title="Əsas iş yeri" description="Boş saxlanıla bilər — müqavilə sonra əlavə olunar. Oklad dəyişəndə tarixçə avtomatik saxlanılır.">
+      <Section
+        icon={BriefcaseIcon}
+        title="Əsas iş yeri"
+        description={
+          hasEmployment
+            ? "Bölmə, vəzifə, oklad və ya ştat payı dəyişikliyi əmr əsasında kadr hərəkəti kimi qeydə alınır (tarixçə və Hərəkət hesabatı)."
+            : "Boş saxlanıla bilər — müqavilə sonra əlavə olunar."
+        }
+      >
         <FormField label="Struktur bölmə" htmlFor="departmentId" error={fe.departmentId} className="sm:col-span-2 lg:col-span-1">
           <FormSelect name="departmentId" value={selects.departmentId!} onChange={set("departmentId")} options={options.departments} placeholder="Seçin" optional invalid={!!fe.departmentId} />
         </FormField>
@@ -191,13 +210,36 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
           <FormSelect name="positionId" value={selects.positionId!} onChange={set("positionId")} options={options.positions} placeholder="Seçin" optional invalid={!!fe.positionId} />
         </FormField>
         {field("hireDate", "İşə qəbul tarixi", { type: "date" })}
-        {field("baseSalary", "Oklad (₼)", { type: "number", inputMode: "decimal", step: "0.01", min: 0, className: "tabular-nums" })}
-        {field("unitShare", "Ştat vahidi", { type: "number", inputMode: "decimal", step: "0.25", min: 0.25, max: 2, placeholder: "1" })}
+        {field("baseSalary", "Oklad (₼)", {
+          type: "number",
+          inputMode: "decimal",
+          step: "0.01",
+          min: 0,
+          className: "tabular-nums",
+          onChange: (e) => {
+            // Dəyər updater-dən əvvəl götürülür — React hadisənin currentTarget-ini sonra sıfırlayır
+            const value = e.currentTarget.value;
+            setJob((j) => ({ ...j, baseSalary: value }));
+          },
+        })}
+        {field("unitShare", "Ştat vahidi", {
+          type: "number",
+          inputMode: "decimal",
+          step: "0.25",
+          min: 0.25,
+          max: 2,
+          placeholder: "1",
+          onChange: (e) => {
+            const value = e.currentTarget.value;
+            setJob((j) => ({ ...j, unitShare: value }));
+          },
+        })}
         <FormField label="Status" htmlFor="status" error={fe.status}>
           <FormSelect name="status" value={selects.status!} onChange={set("status")} options={STATUS} placeholder="Aktiv" />
         </FormField>
         {field("schedule", "İş rejimi", { placeholder: "5 günlük iş həftəsi" })}
         {field("paymentForm", "Ödəniş forması", { placeholder: "Aylıq oklad" })}
+        {jobChanged && <MovementOrderFields fe={fe} className="sm:col-span-2 lg:col-span-3" />}
         {selects.status === "TERMINATED" && (
           <>
             {field("terminationDate", "Azad olunma tarixi", { type: "date", required: true })}

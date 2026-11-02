@@ -1,7 +1,7 @@
 import "server-only";
 import type { Prisma, StaffCategory } from "@prisma/client";
 import { computeLeaveEntitlement, workYearContaining } from "./calc/leave";
-import { computePayroll, type PayrollInput } from "./calc/payroll";
+import { computePayroll, primaryEmploymentIds, type PayrollInput } from "./calc/payroll";
 import { computeSeniority, todayUtc } from "./calc/seniority";
 import { personScopeWhere } from "./auth/scope";
 import { UNIT_GROUPS, type UnitGroup, type UnitNode } from "./personnel";
@@ -25,6 +25,8 @@ async function latestStaffing() {
 
 function payrollInput(e: {
   baseSalary: unknown;
+  unitShare: unknown;
+  isPrimary: boolean;
   position: { hazardousAllowancePct: unknown };
   person: { taxExemptionClause: string | null; academicDegrees: { degree: "PHD" | "DSC" }[]; academicTitles: { title: PayrollInput["titles"][number] }[] };
 }): PayrollInput {
@@ -34,6 +36,8 @@ function payrollInput(e: {
     titles: e.person.academicTitles.map((t) => t.title),
     hazardousAllowancePct: e.position.hazardousAllowancePct === null ? null : Number(e.position.hazardousAllowancePct),
     taxExemptionClause: e.person.taxExemptionClause,
+    isPrimary: e.isPrimary,
+    unitShare: Number(e.unitShare),
   };
 }
 
@@ -175,7 +179,15 @@ export async function getDossier(id: string) {
       createdBy: { select: { username: true, fullName: true } },
       updatedBy: { select: { username: true, fullName: true } },
       deletedBy: { select: { username: true, fullName: true } },
-      employments: { include: { position: true, department: true, salaryHistory: { orderBy: { validFrom: "desc" } } }, orderBy: { hireDate: "desc" } },
+      employments: {
+        include: {
+          position: true,
+          department: true,
+          salaryHistory: { orderBy: { validFrom: "desc" } },
+          movements: { orderBy: [{ effectiveDate: "desc" }, { createdAt: "desc" }], include: { createdBy: { select: { fullName: true, username: true } } } },
+        },
+        orderBy: { hireDate: "desc" },
+      },
       workHistory: { orderBy: { startDate: "desc" } },
       militaryRecord: true,
       disabilities: { orderBy: { issueDate: "desc" } },
@@ -237,6 +249,9 @@ export async function getDossier(id: string) {
     ? computePayroll(
         payrollInput({
           baseSalary: main.baseSalary,
+          unitShare: main.unitShare,
+          // Güzəşt / əlavələr yalnız əsas iş yeri müqaviləsində (dashboard və hesabatlarla eyni qayda)
+          isPrimary: primaryEmploymentIds(active.map((e) => ({ ...e, personId: p.id }))).has(main.id),
           position: main.position,
           person: { taxExemptionClause: p.taxExemptionClause, academicDegrees: p.academicDegrees, academicTitles: p.academicTitles },
         }),
@@ -346,6 +361,8 @@ export interface OrgStaff {
   unitShare: number;
   isPrimary: boolean;
   status: "ACTIVE" | "ON_LEAVE";
+  /** Person.updatedAt (ISO) — sürətli redaktədə optimistik kilid üçün */
+  personUpdatedAt: string;
   mobilePhone: string | null;
   workPhone: string | null;
   email: string | null;
@@ -376,6 +393,7 @@ export async function getOrgStaff(scope: string[] | null): Promise<OrgStaff[]> {
           mobilePhone: true,
           workPhone: true,
           email: true,
+          updatedAt: true,
           academicDegrees: { select: { degree: true } },
           academicTitles: { select: { title: true } },
         },
@@ -403,6 +421,7 @@ export async function getOrgStaff(scope: string[] | null): Promise<OrgStaff[]> {
       unitShare: Number(e.unitShare),
       isPrimary: e.isPrimary,
       status: e.status === "ON_LEAVE" ? "ON_LEAVE" : "ACTIVE",
+      personUpdatedAt: e.person.updatedAt.toISOString(),
       mobilePhone: e.person.mobilePhone,
       workPhone: e.person.workPhone,
       email: e.person.email,

@@ -1,7 +1,8 @@
 import "server-only";
 import type { Prisma, StaffCategory } from "@prisma/client";
-import { computePayroll } from "./calc/payroll";
+import { computePayroll, primaryEmploymentIds } from "./calc/payroll";
 import { prisma } from "./db";
+import { describeMovement } from "./movement-rules";
 import { STAFF_CATEGORY_LABELS } from "./queries";
 import { formatAzDate } from "./validation/primitives";
 
@@ -77,13 +78,16 @@ function groupByDepartment(rows: Emp[]) {
 const sum = (rows: Record<string, Cell>[], key: string) => rows.reduce((s, r) => s + (typeof r[key] === "number" ? (r[key] as number) : 0), 0);
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-function payrollOf(e: Emp) {
+/** primary — güzəşt və əlavələrin tətbiq olunduğu müqavilələr ({@link primaryEmploymentIds}) */
+function payrollOf(e: Emp, primary: Set<string>) {
   return computePayroll({
     baseSalary: Number(e.baseSalary),
     degrees: e.person.academicDegrees.map((d) => d.degree),
     titles: e.person.academicTitles.map((t) => t.title),
     hazardousAllowancePct: e.position.hazardousAllowancePct === null ? null : Number(e.position.hazardousAllowancePct),
     taxExemptionClause: e.person.taxExemptionClause,
+    isPrimary: primary.has(e.id),
+    unitShare: Number(e.unitShare),
   });
 }
 
@@ -132,9 +136,11 @@ export const REPORTS: ReportDef[] = [
     description: "Bölmələr üzrə aylıq oklad cəmi, brutto, netto və işəgötürən xərci (təxmini)",
     params: [],
     async run(scope) {
-      const groups = groupByDepartment(await employments(scope));
+      const list = await employments(scope);
+      const primary = primaryEmploymentIds(list);
+      const groups = groupByDepartment(list);
       const rows = groups.map((g) => {
-        const p = g.items.map(payrollOf);
+        const p = g.items.map((e) => payrollOf(e, primary));
         return {
           department: g.name,
           count: g.items.length,
@@ -157,7 +163,7 @@ export const REPORTS: ReportDef[] = [
         ],
         rows,
         totals,
-        note: "Brutto/netto əlavələr, vergi və sosial ayırmalar sistemdəki əməkhaqqı qaydaları ilə hesablanır — təxmini göstəricidir.",
+        note: "Brutto/netto əlavələr, vergi və sosial ayırmalar sistemdəki əməkhaqqı qaydaları ilə hesablanır — təxmini göstəricidir. Vergi güzəştləri və elmi dərəcə/ad əlavələri şəxsə bir dəfə (əsas iş yerində, ştat payına mütənasib) tətbiq olunur; əvəzçilikdə yalnız oklad.",
       };
     },
   },
@@ -201,29 +207,72 @@ export const REPORTS: ReportDef[] = [
   },
   {
     key: "movement",
-    title: "İşə qəbul və azadolma",
-    description: "Seçilmiş dövrdə işə qəbul edilən və işdən azad olunan əməkdaşlar",
+    title: "Kadr hərəkəti",
+    description: "Seçilmiş dövrdə işə qəbul, köçürmə, oklad dəyişikliyi və işdən azad olunma",
     params: ["period"],
     async run(scope, params) {
       const now = new Date();
       const from = parseDay(params.from) ?? new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
       const to = parseDay(params.to) ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-      const list = await employments(scope, { OR: [{ hireDate: { gte: from, lte: to } }, { terminationDate: { gte: from, lte: to } }] });
-      const events = list.flatMap((e) => [
-        ...(e.hireDate >= from && e.hireDate <= to ? [{ e, kind: "İşə qəbul", date: e.hireDate, article: "" }] : []),
-        ...(e.terminationDate && e.terminationDate >= from && e.terminationDate <= to ? [{ e, kind: "Azad olunma", date: e.terminationDate, article: e.terminationArticle ?? "" }] : []),
+      const [list, moves] = await Promise.all([
+        employments(scope, { OR: [{ hireDate: { gte: from, lte: to } }, { terminationDate: { gte: from, lte: to } }] }),
+        // Köçürmə / oklad dəyişikliyi (dosyedəki forma, tam forma və struktur xəritəsi) — şöbə rəhbəri öz bölməsinə gələn və gedənləri görür
+        prisma.employmentMovement.findMany({
+          where: {
+            effectiveDate: { gte: from, lte: to },
+            employment: { person: { deletedAt: null } },
+            ...(scope ? { OR: [{ employment: { departmentId: { in: scope } } }, { fromDepartmentId: { in: scope } }, { toDepartmentId: { in: scope } }] } : {}),
+          },
+          include: { employment: { select: { department: { select: { name: true } }, position: { select: { name: true } }, person: { select: { fullName: true, code: true } } } } },
+        }),
       ]);
+      type Event = { date: Date; kind: string; name: string; code: string; department: string; position: string; details: string; order: string };
+      const events: Event[] = list.flatMap((e) => [
+        ...(e.hireDate >= from && e.hireDate <= to
+          ? [{ date: e.hireDate, kind: "İşə qəbul", name: e.person.fullName, code: e.person.code, department: e.department.name, position: e.position.name, details: "", order: "" }]
+          : []),
+        ...(e.terminationDate && e.terminationDate >= from && e.terminationDate <= to
+          ? [
+              {
+                date: e.terminationDate,
+                kind: "Azad olunma",
+                name: e.person.fullName,
+                code: e.person.code,
+                department: e.department.name,
+                position: e.position.name,
+                details: e.terminationArticle ? `ƏM ${e.terminationArticle}` : "",
+                order: "",
+              },
+            ]
+          : []),
+      ]);
+      for (const m of moves) {
+        const { kind, details } = describeMovement({
+          fromDepartment: m.fromDepartment,
+          toDepartment: m.toDepartment,
+          fromPosition: m.fromPosition,
+          toPosition: m.toPosition,
+          fromSalary: m.fromSalary === null ? null : Number(m.fromSalary),
+          toSalary: m.toSalary === null ? null : Number(m.toSalary),
+          fromUnitShare: m.fromUnitShare === null ? null : Number(m.fromUnitShare),
+          toUnitShare: m.toUnitShare === null ? null : Number(m.toUnitShare),
+        });
+        events.push({
+          date: m.effectiveDate,
+          kind,
+          name: m.employment.person.fullName,
+          code: m.employment.person.code,
+          // Hərəkətdən sonrakı bölmə / vəzifə (sonradan yenə dəyişibsə, snapshot-dakı ad)
+          department: m.toDepartment ?? m.employment.department.name,
+          position: m.toPosition ?? m.employment.position.name,
+          details,
+          order: `№ ${m.orderNumber} · ${formatAzDate(m.orderDate)}`,
+        });
+      }
       events.sort((a, b) => a.date.getTime() - b.date.getTime());
-      const rows = events.map(({ e, kind, date, article }) => ({
-        date: formatAzDate(date),
-        kind,
-        name: e.person.fullName,
-        code: e.person.code,
-        department: e.department.name,
-        position: e.position.name,
-        article: article ? `ƏM ${article}` : null,
-      }));
+      const rows = events.map((e) => ({ ...e, date: formatAzDate(e.date), details: e.details || null, order: e.order || null }));
       const hires = events.filter((x) => x.kind === "İşə qəbul").length;
+      const exits = events.filter((x) => x.kind === "Azad olunma").length;
       return {
         columns: [
           { key: "date", header: "Tarix", width: 12 },
@@ -232,10 +281,11 @@ export const REPORTS: ReportDef[] = [
           { key: "code", header: "Kod", width: 10 },
           { key: "department", header: "Struktur bölmə", width: 28 },
           { key: "position", header: "Vəzifə", width: 26 },
-          { key: "article", header: "Maddə", width: 10 },
+          { key: "details", header: "Dəyişiklik / maddə", width: 40 },
+          { key: "order", header: "Əmr", width: 18 },
         ],
         rows,
-        totals: { date: "Cəmi", kind: `qəbul ${hires} · azad ${events.length - hires}` },
+        totals: { date: "Cəmi", kind: `qəbul ${hires} · hərəkət ${events.length - hires - exits} · azad ${exits}` },
         note: `Dövr: ${formatAzDate(from)} – ${formatAzDate(to)}`,
       };
     },

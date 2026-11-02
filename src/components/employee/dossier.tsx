@@ -17,11 +17,13 @@ import {
 } from "lucide-react";
 import type * as React from "react";
 import { PersonDocuments } from "@/components/employee/documents";
+import { MovementDialog } from "@/components/employee/movement-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatYmd } from "@/lib/calc/seniority";
-import { STAFF_CATEGORY_LABELS, type Dossier } from "@/lib/queries";
+import { describeMovement } from "@/lib/movement-rules";
+import { STAFF_CATEGORY_LABELS, type Dossier, type PersonFormOptions } from "@/lib/queries";
 import { cn, formatAzn, formatNumber, initials } from "@/lib/utils";
 import { formatAzDate } from "@/lib/validation/primitives";
 
@@ -41,15 +43,30 @@ function Field({ label, value, mono }: { label: string; value: React.ReactNode; 
   );
 }
 
-function Section({ title, description, icon: Icon, children, className }: { title: string; description?: string; icon?: typeof UserIcon; children: React.ReactNode; className?: string }) {
+function Section({
+  title,
+  description,
+  icon: Icon,
+  children,
+  className,
+  action,
+}: {
+  title: string;
+  description?: string;
+  icon?: typeof UserIcon;
+  children: React.ReactNode;
+  className?: string;
+  action?: React.ReactNode;
+}) {
   return (
     <Card className={className}>
-      <CardHeader className="flex-row items-center gap-2">
+      <CardHeader className="flex-row flex-wrap items-center gap-2">
         {Icon && <Icon className="size-4 text-muted-foreground" />}
         <div>
           <CardTitle>{title}</CardTitle>
           {description && <CardDescription>{description}</CardDescription>}
         </div>
+        {action && <div className="ml-auto">{action}</div>}
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
@@ -138,9 +155,53 @@ const daysBetween = (a: Date, b: Date) => Math.round((b.getTime() - a.getTime())
 const TABS = ["personal", "contract", "academic", "family", "leave", "attendance", "documents"];
 
 /** tab — açılışda seçilən bölmə (?tab=documents); canEdit — şəxsi işə sənəd yükləmək; canDelete — sənədi sorğusuz silmək */
-export function EmployeeDossier({ data, canEdit = false, canDelete = false, tab }: { data: Dossier; canEdit?: boolean; canDelete?: boolean; tab?: string }) {
+export function EmployeeDossier({
+  data,
+  canEdit = false,
+  canDelete = false,
+  tab,
+  movementOptions,
+}: {
+  data: Dossier;
+  canEdit?: boolean;
+  canDelete?: boolean;
+  tab?: string;
+  /** Verilibsə — «Köçürmə / maaş dəyişikliyi» forması göstərilir */
+  movementOptions?: PersonFormOptions;
+}) {
   const { person: p, main, seniority, leave, payroll, carryover } = data;
   const status = main ? STATUS[main.status] : null;
+  const activeEmployments = p.employments.filter((e) => e.status !== "TERMINATED");
+  const movements = p.employments
+    .flatMap((e) => e.movements.map((m) => ({ ...m, ...describeMovement({
+      fromDepartment: m.fromDepartment,
+      toDepartment: m.toDepartmentId ? m.toDepartment : null,
+      fromPosition: m.fromPosition,
+      toPosition: m.toPositionId ? m.toPosition : null,
+      fromSalary: m.fromSalary === null ? null : n(m.fromSalary),
+      toSalary: m.toSalary === null ? null : n(m.toSalary),
+      fromUnitShare: m.fromUnitShare === null ? null : n(m.fromUnitShare),
+      toUnitShare: m.toUnitShare === null ? null : n(m.toUnitShare),
+    }) })))
+    .sort((a, b) => b.effectiveDate.getTime() - a.effectiveDate.getTime() || b.createdAt.getTime() - a.createdAt.getTime());
+  const movementForm =
+    canEdit && movementOptions && activeEmployments.length > 0 ? (
+      <MovementDialog
+        personId={p.id}
+        updatedAt={p.updatedAt.toISOString()}
+        options={movementOptions}
+        employments={[...activeEmployments]
+          .sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary))
+          .map((e) => ({
+            id: e.id,
+            label: `${e.position.name} · ${e.department.name}${e.isPrimary ? "" : " (əvəzçilik)"}`,
+            departmentId: e.departmentId,
+            positionId: e.positionId,
+            baseSalary: n(e.baseSalary),
+            unitShare: n(e.unitShare),
+          }))}
+      />
+    ) : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -354,7 +415,7 @@ export function EmployeeDossier({ data, canEdit = false, canDelete = false, tab 
 
         {/* MÜQAVİLƏ VƏ MAAŞ */}
         <TabsContent value="contract" className="flex flex-col gap-4">
-          <Section title="Əmək müqavilələri" icon={BriefcaseIcon}>
+          <Section title="Əmək müqavilələri" icon={BriefcaseIcon} action={movementForm}>
             <SimpleTable
               rows={p.employments}
               columns={[
@@ -398,6 +459,22 @@ export function EmployeeDossier({ data, canEdit = false, canDelete = false, tab 
                 <PayrollList title="" lines={payroll.employerContributions} total={payroll.employerCost} totalLabel="Ümumi xərc" />
               </Section>
             </div>
+          )}
+          {(movements.length > 0 || movementForm) && (
+            <Section title="Kadr hərəkətləri" description="Köçürmə, oklad və ştat payı dəyişiklikləri — əmr əsasında" icon={CalendarClockIcon}>
+              <SimpleTable
+                rows={movements}
+                empty="Hələ kadr hərəkəti qeydə alınmayıb"
+                columns={[
+                  { header: "Qüvvəyə minir", cell: (r) => d(r.effectiveDate), className: "tabular-nums whitespace-nowrap" },
+                  { header: "Hərəkət", cell: (r) => <Badge variant="outline">{r.kind}</Badge> },
+                  { header: "Dəyişiklik", cell: (r) => <span className="whitespace-normal">{r.details}</span> },
+                  { header: "Əmr", cell: (r) => `№ ${r.orderNumber} · ${d(r.orderDate)}`, className: "whitespace-nowrap" },
+                  { header: "Qeyd", cell: (r) => r.note ?? "—" },
+                  { header: "Daxil edib", cell: (r) => r.createdBy?.fullName ?? "—", className: "text-muted-foreground" },
+                ]}
+              />
+            </Section>
           )}
           {main && main.salaryHistory.length > 0 && (
             <Section title="Oklad tarixçəsi" icon={CalendarIcon}>

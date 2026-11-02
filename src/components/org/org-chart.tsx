@@ -30,6 +30,7 @@ import { useRouter } from "next/navigation";
 import { startTransition, useActionState, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { quickUpdatePersonAction, type QuickEditState } from "@/actions/persons";
+import { MovementOrderFields } from "@/components/employee/movement-fields";
 import { deleteDepartmentAction, saveDepartmentAction, type DeptFormState } from "@/actions/structure";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1272,12 +1273,32 @@ function DeptDialog({ state, tree, onClose, onCreated }: { state: DeptDialogStat
 //  Əməkdaş paneli: məlumat + sürətli redaktə
 // ----------------------------------------------------------------------------
 
-function SelectField({ name, label, value, options, error }: { name: string; label: string; value: string; options: { value: string; label: string; hint?: string }[]; error?: string }) {
+function SelectField({
+  name,
+  label,
+  value,
+  options,
+  error,
+  onChange,
+}: {
+  name: string;
+  label: string;
+  value: string;
+  options: { value: string; label: string; hint?: string }[];
+  error?: string;
+  onChange?: (v: string) => void;
+}) {
   const [v, setV] = useState(value);
   return (
     <FormField label={label} htmlFor={name} error={error} required>
       <input type="hidden" name={name} value={v} />
-      <Select value={v} onValueChange={setV}>
+      <Select
+        value={v}
+        onValueChange={(next) => {
+          setV(next);
+          onChange?.(next);
+        }}
+      >
         <SelectTrigger id={name} className="w-full">
           <SelectValue placeholder="Seçin" />
         </SelectTrigger>
@@ -1299,6 +1320,17 @@ function StaffPanel({ staff: s, dept, options, canEdit, onClose }: { staff: OrgS
   const [editing, setEditing] = useState(false);
   const [state, formAction, pending] = useActionState<QuickEditState, FormData>(quickUpdatePersonAction, {});
   const fe = state.ok ? {} : (state.fieldErrors ?? {});
+  // Bölmə / vəzifə / oklad / ştat payı dəyişəndə — əmr sahələri (kadr hərəkəti)
+  const initialJob = { departmentId: s.departmentId, positionId: s.positionId, baseSalary: String(s.baseSalary), unitShare: String(s.unitShare) };
+  const [job, setJob] = useState(initialJob);
+  const jobChanged =
+    job.departmentId !== initialJob.departmentId ||
+    job.positionId !== initialJob.positionId ||
+    Number(job.baseSalary) !== s.baseSalary ||
+    Number(job.unitShare) !== s.unitShare;
+  useEffect(() => {
+    if (!editing) setJob({ departmentId: s.departmentId, positionId: s.positionId, baseSalary: String(s.baseSalary), unitShare: String(s.unitShare) });
+  }, [editing, s.departmentId, s.positionId, s.baseSalary, s.unitShare]);
 
   useEffect(() => {
     if (state.ok) {
@@ -1391,16 +1423,48 @@ function StaffPanel({ staff: s, dept, options, canEdit, onClose }: { staff: OrgS
           >
             <input type="hidden" name="personId" value={s.personId} />
             <input type="hidden" name="employmentId" value={s.employmentId} />
-            <SelectField name="departmentId" label="Struktur bölmə" value={s.departmentId} options={options.departments} error={fe.departmentId} />
-            <SelectField name="positionId" label="Vəzifə" value={s.positionId} options={options.positions} error={fe.positionId} />
+            <input type="hidden" name="updatedAt" value={s.personUpdatedAt} />
+            <SelectField
+              name="departmentId"
+              label="Struktur bölmə"
+              value={s.departmentId}
+              options={options.departments}
+              error={fe.departmentId}
+              onChange={(v) => setJob((j) => ({ ...j, departmentId: v }))}
+            />
+            <SelectField name="positionId" label="Vəzifə" value={s.positionId} options={options.positions} error={fe.positionId} onChange={(v) => setJob((j) => ({ ...j, positionId: v }))} />
             <div className="grid grid-cols-2 gap-3">
               <FormField label="Oklad (₼)" htmlFor="baseSalary" error={fe.baseSalary} required>
-                <Input id="baseSalary" name="baseSalary" type="number" step="0.01" min="0" defaultValue={s.baseSalary} />
+                <Input
+                  id="baseSalary"
+                  name="baseSalary"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  defaultValue={s.baseSalary}
+                  onChange={(e) => {
+                    const value = e.currentTarget.value;
+                    setJob((j) => ({ ...j, baseSalary: value }));
+                  }}
+                />
               </FormField>
               <FormField label="Ştat payı" htmlFor="unitShare" error={fe.unitShare} required>
-                <Input id="unitShare" name="unitShare" type="number" step="0.25" min="0.25" max="2" defaultValue={s.unitShare} />
+                <Input
+                  id="unitShare"
+                  name="unitShare"
+                  type="number"
+                  step="0.25"
+                  min="0.25"
+                  max="2"
+                  defaultValue={s.unitShare}
+                  onChange={(e) => {
+                    const value = e.currentTarget.value;
+                    setJob((j) => ({ ...j, unitShare: value }));
+                  }}
+                />
               </FormField>
             </div>
+            {jobChanged && <MovementOrderFields fe={fe} className="[&_.grid]:grid-cols-1" />}
             <SelectField
               name="status"
               label="Status"
@@ -1421,7 +1485,9 @@ function StaffPanel({ staff: s, dept, options, canEdit, onClose }: { staff: OrgS
               <Input id="email" name="email" type="email" defaultValue={s.email ?? ""} />
             </FormField>
             {state.error && <p className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">{state.error}</p>}
-            <p className="text-[11px] text-muted-foreground">Oklad dəyişəndə maaş tarixçəsinə yeni qeyd əlavə olunur. Bütün dəyişikliklər audit jurnalına yazılır.</p>
+            <p className="text-[11px] text-muted-foreground">
+              Bölmə, vəzifə, oklad və ştat payı dəyişikliyi əmr əsasında kadr hərəkəti kimi qeydə alınır. Bütün dəyişikliklər audit jurnalına yazılır.
+            </p>
           </form>
         )}
       </div>

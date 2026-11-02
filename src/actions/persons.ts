@@ -8,6 +8,7 @@ import { assertUser } from "@/lib/auth/session";
 import { audit, diff, snapshot } from "@/lib/audit";
 import { DELETE_CONFIRM_WORD, matchesConfirmWord } from "@/lib/confirm";
 import { prisma } from "@/lib/db";
+import { applyMovement, MovementError } from "@/lib/movements";
 import { finCode, optEmail } from "@/lib/validation/primitives";
 
 export interface PersonFormState {
@@ -68,6 +69,10 @@ const formSchema = z
     status: z.preprocess(blank, z.enum(["ACTIVE", "ON_LEAVE", "TERMINATED"]).optional()),
     terminationDate: optDate,
     terminationArticle: optStr,
+    // Mövcud müqavilədə bölmə / vəzifə / oklad / ştat payı dəyişəndə — kadr hərəkətinin əmri
+    orderNumber: z.preprocess(blank, z.string().trim().max(64).optional()),
+    orderDate: optDate,
+    effectiveDate: optDate,
   })
   .superRefine((v, ctx) => {
     const today = new Date();
@@ -86,6 +91,16 @@ const formSchema = z
   });
 
 type FormValues = z.infer<typeof formSchema>;
+
+/** Tranzaksiya daxilindən sahə xətaları ilə çıxış */
+class FieldsError extends Error {
+  constructor(
+    message: string,
+    readonly fields: Record<string, string>,
+  ) {
+    super(message);
+  }
+}
 
 const CONFLICT_MESSAGE = "Bu əməkdaşın məlumatlarını siz formanı açandan sonra başqa istifadəçi dəyişib. Dəyişikliklərinizi qeyd edin, səhifəni yeniləyin və yenidən daxil edin.";
 
@@ -143,11 +158,6 @@ async function nextPersonCode(tx: Prisma.TransactionClient): Promise<string> {
     SELECT MAX(CAST(SUBSTRING(code FROM 2) AS INTEGER)) AS max FROM "Person" WHERE code ~ '^E[0-9]+$'`;
   return `E${String((rows[0]?.max ?? 0) + 1).padStart(3, "0")}`;
 }
-
-const todayUtc = () => {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-};
 
 // ----------------------------------------------------------------------------
 //  Əlavə / redaktə
@@ -211,15 +221,32 @@ export async function savePersonAction(_prev: PersonFormState, form: FormData): 
       if (emp) {
         const current = v.employmentId ? before.employments.find((e) => e.id === v.employmentId) : undefined;
         if (current) {
-          for (const [k, pair] of Object.entries(diff(Object.fromEntries(Object.keys(emp).map((k) => [k, current[k as keyof typeof current]])), emp)))
-            changes[`employment.${k}`] = pair;
-          await tx.employment.update({ where: { id: current.id }, data: emp });
-          // Oklad dəyişibsə — temporal tarixçə (idxaldakı qayda ilə eyni)
-          if (Number(current.baseSalary) !== emp.baseSalary) {
-            const today = todayUtc();
-            await tx.salaryRecord.updateMany({ where: { employmentId: current.id, validTo: null }, data: { validTo: new Date(today.getTime() - 86_400_000) } });
-            await tx.salaryRecord.create({ data: { employmentId: current.id, baseSalary: emp.baseSalary, validFrom: today } });
+          // Bölmə / vəzifə / oklad / ştat payı müqavilənin üzərinə səssizcə yazılmır — əmr əsasında kadr hərəkəti kimi
+          // (EmploymentMovement + oklad tarixçəsi qüvvəyə minmə tarixi ilə) qeydə alınır və Hərəkət hesabatına düşür
+          const { departmentId, positionId, baseSalary, unitShare, ...rest } = emp;
+          const jobChanged =
+            current.departmentId !== departmentId || current.positionId !== positionId || Number(current.baseSalary) !== baseSalary || Number(current.unitShare) !== unitShare;
+          if (jobChanged) {
+            const missing: [string, string][] = [];
+            if (!v.orderNumber) missing.push(["orderNumber", "Əmrin nömrəsini daxil edin"]);
+            if (!v.orderDate) missing.push(["orderDate", "Əmrin tarixini daxil edin"]);
+            if (!v.effectiveDate) missing.push(["effectiveDate", "Qüvvəyə minmə tarixini daxil edin"]);
+            if (missing.length) throw new FieldsError("Bölmə, vəzifə, oklad və ya ştat payı dəyişir — əmrin məlumatlarını daxil edin", Object.fromEntries(missing));
+            await applyMovement(tx, user, {
+              personId: v.id,
+              employmentId: current.id,
+              orderNumber: v.orderNumber!,
+              orderDate: v.orderDate!,
+              effectiveDate: v.effectiveDate!,
+              departmentId,
+              positionId,
+              baseSalary,
+              unitShare,
+            });
           }
+          for (const [k, pair] of Object.entries(diff(Object.fromEntries(Object.keys(rest).map((k) => [k, current[k as keyof typeof current]])), rest)))
+            changes[`employment.${k}`] = pair;
+          await tx.employment.update({ where: { id: current.id }, data: rest });
         } else {
           await tx.employment.create({ data: { personId: v.id, ...emp, salaryHistory: { create: { baseSalary: emp.baseSalary, validFrom: emp.hireDate } } } });
           changes.employment = [null, snapshot(emp)];
@@ -242,6 +269,8 @@ export async function savePersonAction(_prev: PersonFormState, form: FormData): 
       return v.id;
     });
   } catch (e) {
+    if (e instanceof FieldsError) return { error: e.message, fieldErrors: e.fields };
+    if (e instanceof MovementError) return { error: e.message, fieldErrors: e.field ? { [e.field]: e.message } : undefined };
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       const target = String((e.meta?.target as string[] | string | undefined) ?? "");
       if (target.includes("personId")) return { error: "Bu şəxs üçün eyni bölmə, vəzifə və tarixlə müqavilə artıq mövcuddur", fieldErrors: { hireDate: "Təkrarlanan müqavilə" } };
@@ -301,6 +330,11 @@ export interface QuickEditState {
 const quickSchema = z.object({
   personId: z.string().min(1),
   employmentId: z.string().min(1),
+  /** Panel açılanda olan Person.updatedAt (ISO) — optimistik kilid (tam formadakı kimi) */
+  updatedAt: optStr,
+  orderNumber: z.preprocess(blank, z.string().trim().max(64).optional()),
+  orderDate: optDate,
+  effectiveDate: optDate,
   mobilePhone: optStr,
   workPhone: optStr,
   email: optEmail,
@@ -323,24 +357,43 @@ export async function quickUpdatePersonAction(_prev: QuickEditState, form: FormD
   const v = parsed.data;
   try {
     await prisma.$transaction(async (tx) => {
-      const person = await tx.person.findFirst({ where: { id: v.personId, deletedAt: null }, select: { fullName: true, mobilePhone: true, workPhone: true, email: true } });
+      const person = await tx.person.findFirst({ where: { id: v.personId, deletedAt: null }, select: { fullName: true, mobilePhone: true, workPhone: true, email: true, updatedAt: true } });
       const emp = await tx.employment.findFirst({ where: { id: v.employmentId, personId: v.personId, status: { not: "TERMINATED" } } });
       if (!person || !emp) throw new Error("Əməkdaş və ya müqavilə tapılmadı");
+      // Optimistik kilid: panel açılandan sonra başqası (tam forma, idxal, başqa panel) dəyişibsə — üstündən yazılmır
+      const expected = v.updatedAt ? new Date(v.updatedAt) : null;
+      if (expected && !Number.isNaN(expected.getTime()) && person.updatedAt.getTime() !== expected.getTime()) throw new Error(CONFLICT_MESSAGE);
 
       const personData = { mobilePhone: v.mobilePhone ?? null, workPhone: v.workPhone ?? null, email: v.email ?? null };
-      const empData = { departmentId: v.departmentId, positionId: v.positionId, baseSalary: v.baseSalary, unitShare: v.unitShare, status: v.status };
       const changes: Record<string, [unknown, unknown]> = diff({ mobilePhone: person.mobilePhone, workPhone: person.workPhone, email: person.email }, personData);
-      for (const [k, pair] of Object.entries(diff(Object.fromEntries(Object.keys(empData).map((k) => [k, emp[k as keyof typeof emp]])), empData))) changes[`employment.${k}`] = pair;
-      if (Object.keys(changes).length === 0) return;
+      if (emp.status !== v.status) changes["employment.status"] = [emp.status, v.status];
+      const jobChanged = emp.departmentId !== v.departmentId || emp.positionId !== v.positionId || Number(emp.baseSalary) !== v.baseSalary || Number(emp.unitShare) !== v.unitShare;
+      if (Object.keys(changes).length === 0 && !jobChanged) return;
 
-      await tx.person.update({ where: { id: v.personId }, data: { ...personData, updatedById: user.id } });
-      await tx.employment.update({ where: { id: emp.id }, data: empData });
-      // Oklad dəyişibsə — temporal tarixçə (tam formadakı qayda ilə eyni)
-      if (Number(emp.baseSalary) !== v.baseSalary) {
-        const today = todayUtc();
-        await tx.salaryRecord.updateMany({ where: { employmentId: emp.id, validTo: null }, data: { validTo: new Date(today.getTime() - 86_400_000) } });
-        await tx.salaryRecord.create({ data: { employmentId: emp.id, baseSalary: v.baseSalary, validFrom: today } });
+      // updateMany + updatedAt şərti: yoxlama ilə yazma arasında başqa tranzaksiya dəyişsə də itirilmir
+      const updated = await tx.person.updateMany({ where: { id: v.personId, updatedAt: person.updatedAt }, data: { ...personData, updatedById: user.id } });
+      if (updated.count === 0) throw new Error(CONFLICT_MESSAGE);
+      if (emp.status !== v.status) await tx.employment.update({ where: { id: emp.id }, data: { status: v.status } });
+      // Bölmə / vəzifə / oklad / ştat payı — əmr əsasında kadr hərəkəti (tam forma və dosyedəki forma ilə eyni qayda)
+      if (jobChanged) {
+        const missing: [string, string][] = [];
+        if (!v.orderNumber) missing.push(["orderNumber", "Əmrin nömrəsini daxil edin"]);
+        if (!v.orderDate) missing.push(["orderDate", "Əmrin tarixini daxil edin"]);
+        if (!v.effectiveDate) missing.push(["effectiveDate", "Qüvvəyə minmə tarixini daxil edin"]);
+        if (missing.length) throw new FieldsError("Bölmə, vəzifə, oklad və ya ştat payı dəyişir — əmrin məlumatlarını daxil edin", Object.fromEntries(missing));
+        await applyMovement(tx, user, {
+          personId: v.personId,
+          employmentId: emp.id,
+          orderNumber: v.orderNumber!,
+          orderDate: v.orderDate!,
+          effectiveDate: v.effectiveDate!,
+          departmentId: v.departmentId,
+          positionId: v.positionId,
+          baseSalary: v.baseSalary,
+          unitShare: v.unitShare,
+        });
       }
+      if (Object.keys(changes).length === 0) return;
       await audit(
         {
           user,
@@ -354,6 +407,8 @@ export async function quickUpdatePersonAction(_prev: QuickEditState, form: FormD
       );
     });
   } catch (e) {
+    if (e instanceof FieldsError) return { error: e.message, fieldErrors: e.fields };
+    if (e instanceof MovementError) return { error: e.message, fieldErrors: e.field ? { [e.field]: e.message } : undefined };
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return { error: "Bu şəxs üçün eyni bölmə, vəzifə və tarixlə müqavilə artıq mövcuddur" };
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") return { error: "Seçilmiş bölmə və ya vəzifə mövcud deyil" };
     return { error: e instanceof Error ? e.message : "Yadda saxlamaq alınmadı" };
@@ -361,5 +416,65 @@ export async function quickUpdatePersonAction(_prev: QuickEditState, form: FormD
   revalidatePath("/org-chart");
   revalidatePath("/employees");
   revalidatePath(`/employees/${v.personId}`);
+  return { ok: true };
+}
+
+// ----------------------------------------------------------------------------
+//  Kadr hərəkəti: köçürmə / oklad / ştat payı dəyişikliyi — əmr əsasında, qüvvəyə minmə tarixi ilə
+// ----------------------------------------------------------------------------
+
+export interface MovementFormState {
+  ok?: boolean;
+  error?: string;
+  fieldErrors?: Record<string, string>;
+}
+
+const movementSchema = z.object({
+  personId: z.string().min(1),
+  employmentId: reqStr("Müqavilə"),
+  updatedAt: optStr,
+  orderNumber: z.preprocess(blank, z.string({ required_error: "Əmrin nömrəsini daxil edin" }).trim().min(1, "Əmrin nömrəsini daxil edin").max(64)),
+  orderDate: reqDate("Əmrin tarixi"),
+  effectiveDate: reqDate("Qüvvəyə minmə tarixi"),
+  departmentId: reqStr("Struktur bölmə"),
+  positionId: reqStr("Vəzifə"),
+  baseSalary: z.preprocess(blank, z.coerce.number({ required_error: "Okladı daxil edin", invalid_type_error: "Rəqəm daxil edin" }).min(0, "Mənfi ola bilməz").max(1_000_000)),
+  unitShare: z.preprocess(blank, z.coerce.number({ required_error: "Ştat payını daxil edin", invalid_type_error: "Rəqəm daxil edin" }).gt(0, "0-dan böyük olmalıdır").max(2)),
+  note: optStr,
+});
+
+export async function recordMovementAction(_prev: MovementFormState, form: FormData): Promise<MovementFormState> {
+  const user = await assertUser("employees.edit");
+  const parsed = movementSchema.safeParse(Object.fromEntries(form));
+  if (!parsed.success) {
+    const fieldErrors: Record<string, string> = {};
+    for (const i of parsed.error.issues) fieldErrors[String(i.path[0])] ??= i.message;
+    return { error: "Formada xətalar var", fieldErrors };
+  }
+  const v = parsed.data;
+  try {
+    await prisma.$transaction((tx) =>
+      applyMovement(tx, user, {
+        personId: v.personId,
+        employmentId: v.employmentId,
+        expectedUpdatedAt: v.updatedAt,
+        orderNumber: v.orderNumber,
+        orderDate: v.orderDate,
+        effectiveDate: v.effectiveDate,
+        departmentId: v.departmentId,
+        positionId: v.positionId,
+        baseSalary: v.baseSalary,
+        unitShare: v.unitShare,
+        note: v.note,
+      }),
+    );
+  } catch (e) {
+    if (e instanceof MovementError) return { error: e.message, fieldErrors: e.field ? { [e.field]: e.message } : undefined };
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return { error: "Bu şəxs üçün eyni bölmə, vəzifə və qəbul tarixi ilə başqa müqavilə artıq mövcuddur" };
+    return { error: e instanceof Error ? e.message : "Yadda saxlamaq alınmadı" };
+  }
+  revalidatePath("/employees");
+  revalidatePath(`/employees/${v.personId}`);
+  revalidatePath("/org-chart");
   return { ok: true };
 }

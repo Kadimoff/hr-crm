@@ -1,5 +1,5 @@
 import "server-only";
-import { computePayroll } from "@/lib/calc/payroll";
+import { computePayroll, primaryEmploymentIds } from "@/lib/calc/payroll";
 import { todayUtc } from "@/lib/calc/seniority";
 import { prisma } from "@/lib/db";
 import { STAFF_CATEGORY_LABELS } from "@/lib/queries";
@@ -22,6 +22,7 @@ export async function getDashboardDataset(scope: string[] | null): Promise<Dashb
         hireDate: true,
         baseSalary: true,
         unitShare: true,
+        isPrimary: true,
         status: true,
         position: { select: { name: true, staffCategory: true, hazardousAllowancePct: true } },
         person: {
@@ -55,6 +56,8 @@ export async function getDashboardDataset(scope: string[] | null): Promise<Dashb
     return path;
   };
   const absent = new Set(absences.map((a) => a.personId));
+  // Güzəşt və əlavələr şəxsə bir dəfə — əsas iş yerində
+  const primaryIds = primaryEmploymentIds(employments);
 
   const rows: DashboardRow[] = employments.map((e) => {
     const degrees = e.person.academicDegrees.map((d) => d.degree);
@@ -64,6 +67,8 @@ export async function getDashboardDataset(scope: string[] | null): Promise<Dashb
       titles: e.person.academicTitles.map((t) => t.title),
       hazardousAllowancePct: e.position.hazardousAllowancePct === null ? null : Number(e.position.hazardousAllowancePct),
       taxExemptionClause: e.person.taxExemptionClause,
+      isPrimary: primaryIds.has(e.id),
+      unitShare: Number(e.unitShare),
     });
     return {
       employmentId: e.id,

@@ -40,11 +40,19 @@ export const DEFAULT_PAYROLL_CONFIG: PayrollConfig = {
 };
 
 export interface PayrollInput {
+  /** Müqavilə üzrə oklad — sistemdə ştat payı artıq daxil olmaqla saxlanılır (0.5 ştat → yarım oklad) */
   baseSalary: number;
   degrees: ("PHD" | "DSC")[];
   titles: ("DOCENT" | "PROFESSOR" | "CORRESPONDING_MEMBER" | "ACADEMICIAN")[];
   hazardousAllowancePct: number | null;
   taxExemptionClause: string | null;
+  /**
+   * Əsas iş yeri (defolt) və ya əvəzçilik. Vergidən azad 200 AZN, VM 102.2 güzəşti və elmi dərəcə / elmi ada görə
+   * əlavələr şəxsə bir dəfə — yalnız əsas iş yerində tətbiq olunur; əvəzçilikdə yalnız oklad və zərərli şərait əlavəsi.
+   */
+  isPrimary?: boolean;
+  /** Tutduğu ştat payı (defolt 1): elmi dərəcə / ad əlavələri ştat payına mütənasib hesablanır (ən çox tam ştat) */
+  unitShare?: number;
 }
 
 export interface PayrollLine {
@@ -80,9 +88,11 @@ export function medicalInsurance(gross: number, rate: { threshold: number; lower
 }
 
 export function computePayroll(input: PayrollInput, cfg: PayrollConfig = DEFAULT_PAYROLL_CONFIG): PayrollResult {
-  // Bir neçə dərəcə/ad olduqda ən yüksəyi tətbiq olunur
-  const degreeAllowance = Math.max(0, ...input.degrees.map((d) => cfg.allowances.degree[d]));
-  const titleAllowance = Math.max(0, ...input.titles.map((t) => cfg.allowances.title[t]));
+  const primary = input.isPrimary ?? true;
+  const share = Math.min(1, Math.max(0, input.unitShare ?? 1));
+  // Bir neçə dərəcə/ad olduqda ən yüksəyi tətbiq olunur; yalnız əsas iş yerində, ştat payına mütənasib
+  const degreeAllowance = primary ? round2(Math.max(0, ...input.degrees.map((d) => cfg.allowances.degree[d])) * share) : 0;
+  const titleAllowance = primary ? round2(Math.max(0, ...input.titles.map((t) => cfg.allowances.title[t])) * share) : 0;
   const hazardousAllowance = round2(input.baseSalary * ((input.hazardousAllowancePct ?? 0) / 100));
 
   const earnings: PayrollLine[] = [
@@ -93,14 +103,18 @@ export function computePayroll(input: PayrollInput, cfg: PayrollConfig = DEFAULT
   ];
   const gross = round2(earnings.reduce((s, l) => s + l.amount, 0));
 
-  const exemption = input.taxExemptionClause ? (cfg.taxExemptions[input.taxExemptionClause] ?? 0) : 0;
-  const { tax, taxable } = incomeTax(gross, exemption, cfg.incomeTax);
+  const exemption = primary && input.taxExemptionClause ? (cfg.taxExemptions[input.taxExemptionClause] ?? 0) : 0;
+  // Aylıq 200 AZN vergidən azad məbləğ də yalnız əsas iş yerində
+  const { tax, taxable } = incomeTax(gross, exemption, primary ? cfg.incomeTax : { ...cfg.incomeTax, exemptAmount: 0 });
   const dsmf = round2(gross * cfg.dsmf.employeeRate);
   const unemployment = round2(gross * cfg.unemployment.employeeRate);
   const medical = medicalInsurance(gross, cfg.medical);
 
   const deductions: PayrollLine[] = [
-    { label: exemption ? `Gəlir vergisi (güzəşt ${exemption} AZN, VM ${input.taxExemptionClause})` : "Gəlir vergisi", amount: tax },
+    {
+      label: !primary ? "Gəlir vergisi (əvəzçilik — güzəştsiz)" : exemption ? `Gəlir vergisi (güzəşt ${exemption} AZN, VM ${input.taxExemptionClause})` : "Gəlir vergisi",
+      amount: tax,
+    },
     { label: `DSMF (${cfg.dsmf.employeeRate * 100}%)`, amount: dsmf },
     { label: `İşsizlikdən sığorta (${cfg.unemployment.employeeRate * 100}%)`, amount: unemployment },
     { label: `İcbari tibbi sığorta (${cfg.medical.lowerRate * 100}%)`, amount: medical },
@@ -124,4 +138,19 @@ export function computePayroll(input: PayrollInput, cfg: PayrollConfig = DEFAULT
     employerCost,
     taxableIncome: taxable,
   };
+}
+
+/**
+ * Hər şəxs üçün güzəşt və əlavələrin tətbiq olunacağı YEGANƏ müqavilə: «əsas iş yeri» işarəli müqavilələrdən ən əvvəl
+ * bağlanmışı. Məlumatda səhvən iki əsas müqavilə olsa da güzəşt ikiqat sayılmır; şəxsin yalnız əvəzçilik müqaviləsi
+ * varsa (əsas iş yeri başqa müəssisədədir) — heç biri.
+ */
+export function primaryEmploymentIds(rows: { id: string; personId: string; isPrimary: boolean; hireDate: Date }[]): Set<string> {
+  const best = new Map<string, { id: string; hireDate: Date }>();
+  for (const r of rows) {
+    if (!r.isPrimary) continue;
+    const cur = best.get(r.personId);
+    if (!cur || r.hireDate < cur.hireDate || (r.hireDate.getTime() === cur.hireDate.getTime() && r.id < cur.id)) best.set(r.personId, { id: r.id, hireDate: r.hireDate });
+  }
+  return new Set([...best.values()].map((b) => b.id));
 }
