@@ -20,7 +20,7 @@ export default async function OrgChartPage() {
   ]);
   return (
     <>
-      <PageHeader title="Təşkilati struktur" description="Əməkdaşı tapmaq üçün adını, kodunu və ya FİN-ini yazın · bölməyə klik — alt bölmələr və heyət açılır · əməkdaşa klik — məlumat və redaktə" />
+      <PageHeader title="Təşkilati struktur" description="Axtarış — ad, kod və ya FİN · bölməyə klik — alt bölmələr və heyət · əməkdaşa klik — məlumat və redaktə" />
       <OrgChart tree={tree} staff={staff} options={options} canEdit={canEdit} canEditStructure={canEditStructure} />
     </>
   );

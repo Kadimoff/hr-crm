@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { startTransition, useActionState, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { startTransition, useActionState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { quickUpdatePersonAction, type QuickEditState } from "@/actions/persons";
 import { MovementOrderFields } from "@/components/employee/movement-fields";
@@ -40,7 +40,9 @@ import { DateInput } from "@/components/ui/date-input";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { searchHaystack, searchKey } from "@/lib/list-state";
 import type { OrgNode, OrgStaff, PersonFormOptions } from "@/lib/queries";
+import { useBackToClose } from "@/lib/use-back-close";
 import { cn, formatAzn, formatIsoDate, formatNumber, initials } from "@/lib/utils";
 
 // ----------------------------------------------------------------------------
@@ -206,7 +208,12 @@ function edgePath(p: Placed) {
 
 const LEVEL_LABEL = ["", "1-ci səviyyə", "2-ci səviyyə", "3-cü səviyyə", "4-cü səviyyə"];
 const MAX_LEVEL = 4;
-const norm = (s: string) => s.toLocaleLowerCase("az");
+/** Axtarış yazı dayandıqdan sonra tətbiq olunur — hər hərfdə bütün xəritə yenidən qurulmur */
+const SEARCH_DEBOUNCE_MS = 220;
+/** Nəticə bundan çoxdursa xəritədə yalnız aktiv nəticənin yolu açılır (məs. «m» — bütün struktur + 640 kart açılırdı) */
+const SEARCH_OPEN_ALL_MAX = 30;
+const dist = (a: Offset, b: Offset) => Math.hypot(a.x - b.x, a.y - b.y);
+const mid = (a: Offset, b: Offset) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
 function indexTree(tree: OrgNode[]) {
   const byId = new Map<string, OrgNode>();
@@ -327,6 +334,14 @@ export function OrgChart({
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [focus, setFocus] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  /** Xəritəyə tətbiq olunan axtarış — yazı dayandıqdan sonra (input özü dərhal yenilənir) */
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const clearQuery = () => {
+    setQuery("");
+    setAppliedQuery("");
+  };
+  /** Enter axtarış hələ tətbiq olunmamış basılıbsa — tətbiq olunan kimi aktiv nəticə seçilir */
+  const pickOnApply = useRef(false);
   const [activeIdx, setActiveIdx] = useState(0);
   /** Mouse altındakı nəticə — yalnız vurğulanır; xəritə yalnız klaviatura ilə seçiləndə hərəkət edir */
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -340,6 +355,10 @@ export function OrgChart({
   const viewport = useRef<HTMLDivElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const panDrag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  /** Toxunma: aktiv barmaqlar (viewport koordinatlarında), iki barmaqla miqyas, toxunuşla düyünü açma */
+  const pointers = useRef(new Map<number, Offset>());
+  const pinch = useRef<{ d0: number; z0: number; m0: Offset; p0: Offset } | null>(null);
+  const tap = useRef<{ key: string; x: number; y: number; moved: boolean } | null>(null);
   const nodeDrag = useRef<{ key: string; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const history = useRef<ViewSnapshot[]>([]);
   /** Düzülüş yeniləndikdən sonra mərkəzə gətiriləcək hədəf */
@@ -400,7 +419,11 @@ export function OrgChart({
       setSelected(v.selected);
       setZoom(v.zoom);
       setPan(v.pan);
-    } else center();
+    } else {
+      center();
+      // Telefonda ilk açılışda bütün 1-ci səviyyə görünsün (mərkəzdə yalnız kök kartı qalırdı)
+      if (window.innerWidth < 640) fitNext.current = true;
+    }
     setRestored(true);
   }, [center]);
 
@@ -424,35 +447,52 @@ export function OrgChart({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const q = norm(query.trim());
+  // Yazı dayandıqdan sonra (startTransition — input donmur); təmizləmə dərhal
+  useEffect(() => {
+    if (!query.trim()) {
+      setAppliedQuery("");
+      return;
+    }
+    const t = setTimeout(() => startTransition(() => setAppliedQuery(query)), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [query]);
+  const q = searchKey(appliedQuery.trim());
 
-  // Axtarış: uyğun bölmələrin və əməkdaşların yolu açılır
+  // Axtarış sətirləri bir dəfə hazırlanır (hər hərfdə lokal-asılı lowercase yox)
+  const staffKeys = useMemo(() => staff.map((s) => searchHaystack([s.fullName, s.code, s.fin])), [staff]);
+  const deptKeys = useMemo(() => [...byId.values()].map((n) => [n, searchHaystack([n.name, n.code])] as const), [byId]);
+
+  /** Nəticənin xəritədə görünməsi üçün açılmalı düyünlər */
+  const pathOf = useCallback(
+    (r: SearchResult, into = new Set<string>()) => {
+      const deptId = r.type === "staff" ? staff.find((s) => s.employmentId === r.id)?.departmentId : parentOf.get(r.id);
+      for (let p: string | null | undefined = deptId; p; p = parentOf.get(p)) into.add(p);
+      if (r.type === "staff" && deptId) into.add(`staff:${deptId}`);
+      return into;
+    },
+    [staff, parentOf],
+  );
+
+  // Axtarış: uyğun bölmələr və əməkdaşlar
   const search = useMemo(() => {
     if (!q) return null;
-    const open = new Set<string>();
     const deptHits = new Set<string>();
     const staffHits = new Set<string>();
-    const openPath = (id: string | null | undefined) => {
-      for (let p = id; p; p = parentOf.get(p)) open.add(p);
-    };
     const results: SearchResult[] = [];
-    for (const s of staff) {
-      if (norm(s.fullName).includes(q) || norm(s.code).includes(q) || norm(s.fin).includes(q)) {
+    staff.forEach((s, i) => {
+      if (staffKeys[i]!.includes(q)) {
         staffHits.add(s.employmentId);
-        openPath(s.departmentId);
-        open.add(`staff:${s.departmentId}`);
         results.push({ type: "staff", id: s.employmentId });
       }
-    }
-    for (const n of byId.values()) {
-      if (norm(n.name).includes(q) || norm(n.code).includes(q)) {
+    });
+    for (const [n, key] of deptKeys) {
+      if (key.includes(q)) {
         deptHits.add(n.id);
-        openPath(parentOf.get(n.id));
         results.push({ type: "dept", id: n.id });
       }
     }
-    return { open, deptHits, staffHits, results };
-  }, [q, byId, parentOf, staff]);
+    return { deptHits, staffHits, results };
+  }, [q, staff, staffKeys, deptKeys]);
 
   const results = search?.results ?? [];
   const active = results[Math.min(activeIdx, results.length - 1)];
@@ -461,11 +501,22 @@ export function OrgChart({
     setHoverIdx(null);
   }, [q]);
 
-  const isOpen = useCallback((key: string) => (search ? search.open.has(key) : expanded.has(key)), [search, expanded]);
+  // Az nəticə — hamısının yolu açılır; çox nəticə — yalnız aktiv nəticənin yolu (xəritə yüngül qalır)
+  const searchOpen = useMemo(() => {
+    if (!search) return null;
+    if (search.results.length <= SEARCH_OPEN_ALL_MAX) {
+      const open = new Set<string>();
+      for (const r of search.results) pathOf(r, open);
+      return open;
+    }
+    return active ? pathOf(active) : new Set<string>();
+  }, [search, active, pathOf]);
+
+  const isOpen = useCallback((key: string) => (searchOpen ? searchOpen.has(key) : expanded.has(key)), [searchOpen, expanded]);
 
   // --- Naviqasiya tarixçəsi ("Geri") ---------------------------------------------
   const pushHistory = () => {
-    history.current.push({ expanded: [...(search ? search.open : expanded)], focus, selected });
+    history.current.push({ expanded: [...(searchOpen ?? expanded)], focus, selected });
     if (history.current.length > 50) history.current.shift();
     setHistoryLen(history.current.length);
   };
@@ -473,7 +524,7 @@ export function OrgChart({
     const s = history.current.pop();
     setHistoryLen(history.current.length);
     if (!s) return;
-    setQuery("");
+    clearQuery();
     setExpanded(new Set(s.expanded));
     if (s.focus !== focus) center();
     setFocus(s.focus);
@@ -490,12 +541,12 @@ export function OrgChart({
   const toggleNode = (key: string) => {
     pushHistory();
     setExpanded((prev) => {
-      const next = new Set(search ? search.open : prev);
+      const next = new Set(searchOpen ?? prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
-    if (search) setQuery("");
+    if (search) clearQuery();
   };
 
   const selectStaff = (id: string) => {
@@ -518,9 +569,18 @@ export function OrgChart({
     if (!inside) setFocus(null);
     setExpanded(path);
     if (r.type === "staff") setSelected(r.id);
-    setQuery("");
+    clearQuery();
     pendingTarget.current = r;
   };
+  useEffect(() => {
+    if (!pickOnApply.current || !search) return;
+    pickOnApply.current = false;
+    if (active) pick(active);
+  });
+
+  // Mobil «Geri» açıq əməkdaş panelini bağlayır (struktur səhifəsindən çıxmır).
+  // Hook OrgChart səviyyəsindədir — başqa əməkdaşa keçəndə tarixçə qeydi dəyişmir.
+  useBackToClose(!!selected, () => setSelected(null));
 
   // Görünən ağac
   const mapRoot = useMemo((): MapNode => {
@@ -591,7 +651,7 @@ export function OrgChart({
 
   const setLevel = (level: number) => {
     pushHistory();
-    setQuery("");
+    clearQuery();
     setFocus(null);
     setExpanded(idsUpToLevel(tree, level));
     center();
@@ -606,7 +666,7 @@ export function OrgChart({
   const fitNext = useRef(false);
   const resetFlow = () => {
     pushHistory();
-    setQuery("");
+    clearQuery();
     setFocus(null);
     setSelected(null);
     setExpanded(new Set());
@@ -622,6 +682,8 @@ export function OrgChart({
 
   // Düyünün sürüklənməsi: 4px-dən az hərəkət — klik (aç/bağla)
   const onNodePointerDown = (p: Placed) => (e: React.PointerEvent) => {
+    // Toxunma ekranında kart sürüklənmir: barmaq xəritəni hərəkət etdirir, toxunuş — açır/bağlayır (viewport-da)
+    if (e.pointerType !== "mouse") return;
     if (p.kind === "root" || (e.target as HTMLElement).closest("button, a, input")) return;
     e.stopPropagation();
     const own = offsets[p.key] ?? { x: 0, y: 0 };
@@ -644,6 +706,25 @@ export function OrgChart({
     if (d.moved) setOffsets((prev) => (saveOffsets(prev), prev));
     else if (p.kind === "dept" || p.kind === "staff") toggleNode(p.key);
   };
+
+  // Dar ekranda xəritə görünən sahənin qalan hissəsini tutur (alətlər paneli mobil ekranda 2-3 sətirdir)
+  const [mapHeight, setMapHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = viewport.current;
+      if (!el || window.innerWidth >= 640) return setMapHeight(null);
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      // 32 — <main>-in alt boşluğu (py-6) + kartın haşiyəsi: səhifə özü sürüşməsin
+      setMapHeight(Math.max(360, Math.round(window.innerHeight - top - 32)));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+  // Klaviatura yalnız siçanlı cihazda avtomatik fokuslanır — telefonda açılışda ekran klaviaturası xəritəni örtürdü
+  useEffect(() => {
+    if (window.matchMedia("(pointer: fine)").matches) searchInput.current?.focus();
+  }, []);
 
   const totals = useMemo(() => tree.reduce((a, n) => ({ units: a.units + n.units, filled: a.filled + n.filled, headcount: a.headcount + n.headcount }), { units: 0, filled: 0, headcount: 0 }), [tree]);
   const selectedStaff = selected ? staff.find((s) => s.employmentId === selected) : undefined;
@@ -673,19 +754,20 @@ export function OrgChart({
 
   return (
     <Card className="overflow-hidden">
-      <div className="flex flex-wrap items-center gap-2 border-b p-3">
-        <Button variant="outline" size="sm" onClick={goBack} disabled={historyLen === 0} title="Əvvəlki görünüşə qayıt">
-          <Undo2Icon /> Geri
+      <div className="flex flex-wrap items-center gap-2 border-b p-2 sm:p-3">
+        <Button variant="outline" size="sm" onClick={goBack} disabled={historyLen === 0} title="Əvvəlki görünüşə qayıt" aria-label="Əvvəlki görünüşə qayıt">
+          <Undo2Icon /> <span className="hidden sm:inline">Geri</span>
         </Button>
-        <div className="relative w-full sm:w-96">
+        <div className="relative min-w-0 flex-1 sm:w-96 sm:flex-none">
           <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-primary" />
           <Input
             ref={searchInput}
-            autoFocus
+            type="search"
+            enterKeyHint="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (!results.length) return;
+              if (!results.length && !(e.key === "Enter" && query !== appliedQuery)) return;
               if (e.key === "ArrowDown") {
                 e.preventDefault();
                 setHoverIdx(null);
@@ -694,10 +776,14 @@ export function OrgChart({
                 e.preventDefault();
                 setHoverIdx(null);
                 setActiveIdx((i) => Math.max(0, i - 1));
+              } else if (e.key === "Enter" && query !== appliedQuery) {
+                e.preventDefault();
+                pickOnApply.current = true;
+                setAppliedQuery(query);
               } else if (e.key === "Enter" && active) {
                 e.preventDefault();
                 pick(active);
-              } else if (e.key === "Escape") setQuery("");
+              } else if (e.key === "Escape") clearQuery();
             }}
             placeholder="Əməkdaş (ad, kod, FİN) və ya bölmə axtar…"
             className="h-10 border-primary/40 pr-8 pl-9 shadow-sm"
@@ -708,7 +794,7 @@ export function OrgChart({
             <kbd className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 rounded border bg-muted px-1.5 font-mono text-[10px] text-muted-foreground sm:block">/</kbd>
           )}
           {query && (
-            <button type="button" onClick={() => setQuery("")} aria-label="Axtarışı təmizlə" className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted">
+            <button type="button" onClick={() => clearQuery()} aria-label="Axtarışı təmizlə" className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted">
               <XIcon className="size-3.5" />
             </button>
           )}
@@ -724,14 +810,14 @@ export function OrgChart({
           )}
         </div>
         <div className="flex items-center gap-1">
-          <span className="mr-1 text-xs text-muted-foreground">Səviyyə:</span>
+          <span className="mr-1 hidden text-xs text-muted-foreground sm:inline">Səviyyə:</span>
           {[1, 2, 3, 4].map((lvl) => (
-            <Button key={lvl} variant="outline" size="sm" onClick={() => setLevel(lvl)} title={`${lvl}-ci səviyyəyədək aç`}>
+            <Button key={lvl} variant="outline" size="sm" className="px-2.5 sm:px-3" onClick={() => setLevel(lvl)} title={`${lvl}-ci səviyyəyədək aç`} aria-label={`${lvl}-ci səviyyəyədək aç`}>
               {lvl}
             </Button>
           ))}
         </div>
-        <div className="flex gap-3 text-xs text-muted-foreground tabular-nums">
+        <div className="hidden gap-3 text-xs text-muted-foreground tabular-nums sm:flex">
           <span>{totals.headcount} əməkdaş</span>
           <span>
             {formatNumber(totals.filled, 1)} / {formatNumber(totals.units, 1)} ştat
@@ -740,47 +826,105 @@ export function OrgChart({
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-1">
           {canEditStructure && (
-            <Button variant="outline" size="sm" onClick={() => setDeptDialog({ mode: "create", parent: focus ? (byId.get(focus) ?? null) : null })}>
+            <Button variant="outline" size="sm" onClick={() => setDeptDialog({ mode: "create", parent: focus ? (byId.get(focus) ?? null) : null })} aria-label="Bölmə əlavə et">
               <PlusIcon /> Bölmə
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={resetFlow} title="Hamısını bağla, düzülüşü sıfırla və ekrana sığdır">
-            <RotateCcwIcon /> Flow-u sıfırla
+          <Button variant="outline" size="sm" onClick={resetFlow} title="Hamısını bağla, düzülüşü sıfırla və ekrana sığdır" aria-label="Flow-u sıfırla">
+            <RotateCcwIcon /> <span className="hidden sm:inline">Flow-u sıfırla</span>
           </Button>
           {manual && (
-            <Button variant="ghost" size="sm" onClick={resetLayout} title="Əl ilə dəyişdirilmiş mövqeləri sıfırla">
-              <LayoutGridIcon /> Düzülüşü sıfırla
+            <Button variant="ghost" size="sm" onClick={resetLayout} title="Əl ilə dəyişdirilmiş mövqeləri sıfırla" aria-label="Düzülüşü sıfırla">
+              <LayoutGridIcon /> <span className="hidden sm:inline">Düzülüşü sıfırla</span>
             </Button>
           )}
-          <Button variant="outline" size="icon" className="size-8" aria-label="Kiçilt" onClick={() => zoomAt(zoom - 0.1, undefined, undefined, true)}>
-            <MinusIcon />
-          </Button>
-          <span className="w-12 text-center text-xs tabular-nums">{Math.round(zoom * 100)}%</span>
-          <Button variant="outline" size="icon" className="size-8" aria-label="Böyüt" onClick={() => zoomAt(zoom + 0.1, undefined, undefined, true)}>
-            <PlusIcon />
-          </Button>
-          <Button variant="outline" size="sm" onClick={fit}>
-            <MaximizeIcon /> Ekrana sığdır
-          </Button>
+          {/* Miqyas düymələri bir qrupda — dar ekranda ayrı sətirlərə bölünmür */}
+          <div className="flex items-center gap-1">
+            <Button variant="outline" size="icon" className="size-8" aria-label="Kiçilt" onClick={() => zoomAt(zoom - 0.1, undefined, undefined, true)}>
+              <MinusIcon />
+            </Button>
+            <span className="w-11 text-center text-xs tabular-nums">{Math.round(zoom * 100)}%</span>
+            <Button variant="outline" size="icon" className="size-8" aria-label="Böyüt" onClick={() => zoomAt(zoom + 0.1, undefined, undefined, true)}>
+              <PlusIcon />
+            </Button>
+            <Button variant="outline" size="sm" onClick={fit} aria-label="Ekrana sığdır" title="Ekrana sığdır">
+              <MaximizeIcon /> <span className="hidden sm:inline">Ekrana sığdır</span>
+            </Button>
+          </div>
         </div>
       </div>
 
       <div
         ref={viewport}
-        className="relative h-[calc(100dvh-230px)] min-h-[480px] cursor-grab touch-none overflow-hidden bg-[radial-gradient(var(--border)_1px,transparent_1px)] [background-size:22px_22px] select-none active:cursor-grabbing"
+        data-org-viewport
+        style={mapHeight ? { height: mapHeight } : undefined}
+        className="relative h-[calc(100dvh-230px)] min-h-[360px] cursor-grab touch-none overflow-hidden overscroll-none bg-[radial-gradient(var(--border)_1px,transparent_1px)] [background-size:22px_22px] select-none active:cursor-grabbing sm:min-h-[480px]"
         onPointerDown={(e) => {
           // Portal-dakı elementlər (panelin Select siyahısı) React ağacında buraya «bubble» edir — pointer capture
           // seçimi pozur (pointerup variantın yerinə bura düşür). DOM-da viewport-a aid olmayan hədəf — yalnız keçirik.
           if (!(e.currentTarget as HTMLElement).contains(e.target as Node)) return;
           if ((e.target as HTMLElement).closest("button, a, input, [data-panel]")) return;
-          panDrag.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
+          const r = e.currentTarget.getBoundingClientRect();
+          pointers.current.set(e.pointerId, { x: e.clientX - r.left, y: e.clientY - r.top });
           (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          if (pointers.current.size === 2) {
+            // İki barmaq — miqyas (pinch); sürükləmə və toxunuş ləğv olunur
+            const [a, b] = [...pointers.current.values()] as [Offset, Offset];
+            pinch.current = { d0: Math.max(dist(a, b), 1), z0: view.current.zoom, m0: mid(a, b), p0: view.current.pan };
+            panDrag.current = null;
+            nodeDrag.current = null;
+            tap.current = null;
+            return;
+          }
+          if (pointers.current.size > 2) return;
+          panDrag.current = { x: e.clientX, y: e.clientY, px: view.current.pan.x, py: view.current.pan.y };
+          const node = e.pointerType !== "mouse" ? (e.target as HTMLElement).closest<HTMLElement>("[data-node-key]") : null;
+          tap.current = node && (node.dataset.nodeKind === "dept" || node.dataset.nodeKind === "staff") ? { key: node.dataset.nodeKey!, x: e.clientX, y: e.clientY, moved: false } : null;
         }}
         onPointerMove={(e) => {
+          if (!pointers.current.has(e.pointerId)) return;
+          const r = e.currentTarget.getBoundingClientRect();
+          pointers.current.set(e.pointerId, { x: e.clientX - r.left, y: e.clientY - r.top });
+          const pz = pinch.current;
+          if (pz && pointers.current.size >= 2) {
+            const [a, b] = [...pointers.current.values()] as [Offset, Offset];
+            const nz = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, (pz.z0 * dist(a, b)) / pz.d0));
+            const m = mid(a, b);
+            // Barmaqların arasındakı nöqtə barmaqların altında qalır (həm miqyas, həm sürüşmə)
+            const np = { x: m.x - ((pz.m0.x - pz.p0.x) * nz) / pz.z0, y: m.y - ((pz.m0.y - pz.p0.y) * nz) / pz.z0 };
+            view.current = { zoom: nz, pan: np };
+            setInstant(true);
+            setZoom(nz);
+            setPan(np);
+            return;
+          }
+          if (tap.current && Math.abs(e.clientX - tap.current.x) + Math.abs(e.clientY - tap.current.y) > 8) tap.current.moved = true;
           if (!panDrag.current) return;
           setPan({ x: panDrag.current.px + e.clientX - panDrag.current.x, y: panDrag.current.py + e.clientY - panDrag.current.y });
         }}
-        onPointerUp={() => (panDrag.current = null)}
+        onPointerUp={(e) => {
+          const wasTap = tap.current && !tap.current.moved && pointers.current.size === 1 ? tap.current.key : null;
+          pointers.current.delete(e.pointerId);
+          tap.current = null;
+          if (pinch.current) {
+            if (pointers.current.size < 2) pinch.current = null;
+            // Bir barmaq qalıbsa — ondan sürüşdürmə davam edir
+            const rest = [...pointers.current.values()][0];
+            const r = e.currentTarget.getBoundingClientRect();
+            panDrag.current = rest ? { x: rest.x + r.left, y: rest.y + r.top, px: view.current.pan.x, py: view.current.pan.y } : null;
+            clearTimeout(instantTimer.current);
+            instantTimer.current = setTimeout(() => setInstant(false), 200);
+            return;
+          }
+          panDrag.current = null;
+          if (wasTap) toggleNode(wasTap);
+        }}
+        onPointerCancel={(e) => {
+          pointers.current.delete(e.pointerId);
+          if (pointers.current.size < 2) pinch.current = null;
+          panDrag.current = null;
+          tap.current = null;
+        }}
       >
         <div className="absolute top-0 left-0 origin-top-left transition-transform duration-300 ease-out" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transitionDuration: instant || panDrag.current || nodeDrag.current ? "0ms" : undefined }}>
           <svg className="pointer-events-none absolute top-0 left-0 overflow-visible" width="1" height="1" aria-hidden>
@@ -801,6 +945,8 @@ export function OrgChart({
           {placed.map((p) => (
             <div
               key={p.key}
+              data-node-key={p.key}
+              data-node-kind={p.kind}
               className={cn("absolute top-0 left-0", p.kind !== "root" && "cursor-pointer active:cursor-grabbing")}
               style={{ width: p.w, height: p.h, transform: `translate(${p.x}px, ${p.y}px)` }}
               onPointerDown={onNodePointerDown(p)}
@@ -838,8 +984,11 @@ export function OrgChart({
           ))}
         </div>
 
-        <p className="pointer-events-none absolute bottom-2 left-3 text-[11px] text-muted-foreground">
+        <p className="pointer-events-none absolute bottom-2 left-3 hidden text-[11px] text-muted-foreground pointer-fine:block">
           Kartı sürükləyin — yerini dəyişin · boş sahəni sürükləyin — hərəkət · siçan təkəri — böyüt/kiçilt · görünüş yadda saxlanılır
+        </p>
+        <p className="pointer-events-none absolute right-3 bottom-2 left-3 text-[11px] text-muted-foreground pointer-fine:hidden">
+          Bir barmaqla sürüşdürün · iki barmaqla böyüdün/kiçildin · bölməyə toxunun — açılır
         </p>
 
         <AnimatePresence>
@@ -948,7 +1097,8 @@ function ToggleDot({ dir, open, count, color, onClick }: { dir: 1 | -1; open: bo
       aria-label={open ? "Bağla" : "Aç"}
       aria-expanded={open}
       className={cn(
-        "absolute top-1/2 z-10 flex h-6 min-w-6 -translate-y-1/2 items-center justify-center rounded-full border-2 bg-card px-1 text-[10px] font-bold shadow-sm transition-transform hover:scale-110",
+        // before: — görünməz toxunma sahəsi (~44px), düymənin görünüşü dəyişmir
+        "absolute top-1/2 z-10 flex h-6 min-w-6 -translate-y-1/2 items-center justify-center rounded-full border-2 bg-card px-1 text-[10px] font-bold shadow-sm transition-transform before:absolute before:-inset-2.5 before:content-[''] hover:scale-110",
         dir === 1 ? "-right-3" : "-left-3",
       )}
       style={{ borderColor: color, color }}
@@ -966,7 +1116,7 @@ function NodeAction({ label, onClick, children, light }: { label: string; onClic
       onClick={onClick}
       title={label}
       aria-label={label}
-      className={cn("rounded-md p-1 transition-colors", light ? "text-white/80 hover:bg-white/20 hover:text-white" : "text-muted-foreground hover:bg-muted hover:text-foreground")}
+      className={cn("rounded-md p-1 transition-colors pointer-coarse:p-2", light ? "text-white/80 hover:bg-white/20 hover:text-white" : "text-muted-foreground hover:bg-muted hover:text-foreground")}
     >
       {children}
     </button>
@@ -1061,7 +1211,7 @@ function DeptCard({
             {d.closed && <Badge variant="danger">ləğv</Badge>}
           </div>
         </div>
-        <div className="-mt-1 -mr-1 flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <div className="-mt-1 -mr-1 flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
           <NodeAction label="Mərkəzə gətir" onClick={onFocus}>
             <CrosshairIcon className="size-3.5" />
           </NodeAction>
