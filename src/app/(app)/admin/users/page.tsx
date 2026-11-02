@@ -31,6 +31,7 @@ export default async function UsersPage() {
           departmentName: u.department?.name ?? null,
           isActive: u.isActive,
           canDeleteDocuments: u.canDeleteDocuments,
+          mustChangePassword: u.mustChangePassword,
           lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
           createdAt: u.createdAt.toISOString(),
           createdBy: u.createdBy?.username ?? null,

@@ -1,6 +1,7 @@
 "use client";
 
-import { LogOutIcon } from "lucide-react";
+import { KeyRoundIcon, LogOutIcon } from "lucide-react";
+import Link from "next/link";
 import { startTransition } from "react";
 import { logoutAction } from "@/actions/auth";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,12 @@ export function UserMenu({ user }: { user: CurrentUser }) {
             {user.departmentName && ` · ${user.departmentName}`}
           </span>
         </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/change-password">
+            <KeyRoundIcon /> Şifrəni dəyiş
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         {/* Menyu seçimdən sonra dərhal bağlandığı üçün <form> yox, birbaşa action çağırışı */}
         <DropdownMenuItem className="text-danger data-[highlighted]:text-danger" onSelect={() => startTransition(() => logoutAction())}>

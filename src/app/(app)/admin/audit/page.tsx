@@ -27,6 +27,7 @@ const ACTION_LABEL: Record<AuditAction, { label: string; variant: "success" | "w
   EXPORT: { label: "İxrac", variant: "outline" },
   PRINT: { label: "Çap", variant: "outline" },
   PASSWORD_RESET: { label: "Şifrə", variant: "warning" },
+  PASSWORD_CHANGE: { label: "Şifrə dəyişdi", variant: "outline" },
 };
 
 const ENTITY_LABEL: Record<string, string> = {

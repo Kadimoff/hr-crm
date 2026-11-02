@@ -5,6 +5,7 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
 import { prisma } from "@/lib/db";
+import { PEER_HEADER, resolveClientIp } from "./client-ip";
 import { can, type Permission } from "./roles";
 
 export const SESSION_COOKIE = "ehr_session";
@@ -21,11 +22,20 @@ export interface CurrentUser {
   departmentName: string | null;
   /** Şəxsi iş sənədlərini sorğusuz silə bilər (root verir) */
   canDeleteDocuments: boolean;
+  /** Şifrəni dəyişənə qədər yalnız /change-password açılır, server action-lar rədd edilir */
+  mustChangePassword: boolean;
 }
 
+/** Klientin IP ünvanı — TCP soketdən (bax: client-ip.ts); X-Forwarded-For yalnız TRUSTED_PROXY_HOPS verildikdə nəzərə alınır */
 export async function clientIp(): Promise<string | null> {
   const h = await headers();
-  return h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || null;
+  return resolveClientIp({ peer: h.get(PEER_HEADER), forwardedFor: h.get("x-forwarded-for"), realIp: h.get("x-real-ip") }, process.env.TRUSTED_PROXY_HOPS);
+}
+
+/** Cari sessiyanın id-si (tokenin heşi) — şifrə dəyişəndə digər sessiyaları bağlamaq üçün */
+export async function currentSessionId(): Promise<string | null> {
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  return token ? hashToken(token) : null;
 }
 
 export async function createSession(userId: string): Promise<void> {
@@ -57,17 +67,44 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   if (!token) return null;
   const session = await prisma.session.findUnique({
     where: { id: hashToken(token) },
-    select: { expiresAt: true, user: { select: { id: true, username: true, fullName: true, role: true, isActive: true, canDeleteDocuments: true, departmentId: true, department: { select: { name: true } } } } },
+    select: {
+      expiresAt: true,
+      user: {
+        select: {
+          id: true,
+          username: true,
+          fullName: true,
+          role: true,
+          isActive: true,
+          canDeleteDocuments: true,
+          mustChangePassword: true,
+          departmentId: true,
+          department: { select: { name: true } },
+        },
+      },
+    },
   });
   if (!session || session.expiresAt < new Date() || !session.user.isActive) return null;
   const u = session.user;
-  return { id: u.id, username: u.username, fullName: u.fullName, role: u.role, departmentId: u.departmentId, departmentName: u.department?.name ?? null, canDeleteDocuments: u.canDeleteDocuments };
+  return {
+    id: u.id,
+    username: u.username,
+    fullName: u.fullName,
+    role: u.role,
+    departmentId: u.departmentId,
+    departmentName: u.department?.name ?? null,
+    canDeleteDocuments: u.canDeleteDocuments,
+    mustChangePassword: u.mustChangePassword,
+  };
 });
 
-/** Səhifələr üçün: giriş yoxdursa /login-ə, icazə yoxdursa /dashboard-a yönləndirir */
+export const CHANGE_PASSWORD_PATH = "/change-password";
+
+/** Səhifələr üçün: giriş yoxdursa /login-ə, şifrəni dəyişməlidirsə /change-password-a, icazə yoxdursa /dashboard-a yönləndirir */
 export async function requireUser(permission?: Permission): Promise<CurrentUser> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  if (user.mustChangePassword) redirect(CHANGE_PASSWORD_PATH);
   if (permission && !can(user.role, permission)) redirect("/dashboard?denied=1");
   return user;
 }
@@ -85,6 +122,7 @@ export class AuthError extends Error {
 export async function assertUser(permission?: Permission): Promise<CurrentUser> {
   const user = await getCurrentUser();
   if (!user) throw new AuthError("Sessiya bitib — yenidən daxil olun", 401);
+  if (user.mustChangePassword) throw new AuthError("Davam etmək üçün əvvəlcə şifrənizi dəyişin", 403);
   if (permission && !can(user.role, permission)) throw new AuthError("Bu əməliyyat üçün icazəniz yoxdur", 403);
   return user;
 }

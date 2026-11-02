@@ -24,6 +24,7 @@ export interface UserRow {
   departmentName: string | null;
   isActive: boolean;
   canDeleteDocuments: boolean;
+  mustChangePassword: boolean;
   lastLoginAt: string | null;
   createdAt: string;
   createdBy: string | null;
@@ -115,7 +116,7 @@ function CreateUserDialog({ departments }: { departments: Dept[] }) {
         <form key={String(f.open)} onSubmit={f.onSubmit} className="flex flex-col gap-4" noValidate>
           <DialogHeader>
             <DialogTitle>Yeni istifadəçi</DialogTitle>
-            <DialogDescription>İstifadəçi adı ilə sistemə daxil olacaq. Şifrəni ona təhlükəsiz yolla çatdırın.</DialogDescription>
+            <DialogDescription>İstifadəçi adı ilə sistemə daxil olacaq. Şifrəni ona təhlükəsiz yolla çatdırın — ilk girişdə o, şifrəni özününkü ilə əvəz etməli olacaq.</DialogDescription>
           </DialogHeader>
           <FormField label="İstifadəçi adı" htmlFor="username" error={f.fe.username} hint="Latın hərfləri, rəqəm, . _ - (məs. a.memmedov)" required>
             <Input id="username" name="username" autoCapitalize="none" autoComplete="off" />
@@ -199,7 +200,7 @@ function ResetPasswordDialog({ user }: { user: UserRow }) {
           <input type="hidden" name="id" value={user.id} />
           <DialogHeader>
             <DialogTitle>Şifrəni sıfırla — @{user.username}</DialogTitle>
-            <DialogDescription>İstifadəçinin bütün açıq sessiyaları bağlanacaq.</DialogDescription>
+            <DialogDescription>İstifadəçinin bütün açıq sessiyaları bağlanacaq; növbəti girişdə o, yeni şifrəni özününkü ilə əvəz etməli olacaq.</DialogDescription>
           </DialogHeader>
           <FormField label="Yeni şifrə" htmlFor="password" error={f.fe.password} hint="Ən azı 8 simvol, hərf və rəqəm" required>
             <Input id="password" name="password" type="password" autoComplete="new-password" autoFocus />
@@ -256,6 +257,11 @@ export function UsersAdmin({ users, departments, meId }: { users: UserRow[]; dep
                   <div className="flex flex-wrap gap-1">
                     <Badge variant={ROLE_VARIANT[u.role]}>{ROLE_LABELS[u.role]}</Badge>
                     {!u.isActive && <Badge variant="danger">Deaktiv</Badge>}
+                    {u.mustChangePassword && (
+                      <Badge variant="outline" title="Root-un verdiyi şifrə ilə ilk girişdə öz şifrəsini təyin etməlidir">
+                        Şifrəni dəyişməlidir
+                      </Badge>
+                    )}
                     {u.role !== "ROOT" && u.canDeleteDocuments && <Badge variant="outline">Sənəd silə bilər</Badge>}
                   </div>
                 </td>

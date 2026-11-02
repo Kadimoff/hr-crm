@@ -53,7 +53,16 @@ export async function createUserAction(_prev: UserFormState, form: FormData): Pr
   const { username, fullName, role, departmentId, password } = parsed.data;
   try {
     const user = await prisma.user.create({
-      data: { username, fullName, role, departmentId: role === "DEPT_HEAD" ? departmentId : null, passwordHash: await hashPassword(password), createdById: actor.id },
+      // İlk girişdə istifadəçi root-un verdiyi şifrəni özününkü ilə əvəz etməlidir
+      data: {
+        username,
+        fullName,
+        role,
+        departmentId: role === "DEPT_HEAD" ? departmentId : null,
+        passwordHash: await hashPassword(password),
+        mustChangePassword: true,
+        createdById: actor.id,
+      },
       include: { department: { select: { name: true } } },
     });
     await audit({
@@ -117,11 +126,13 @@ export async function resetPasswordAction(_prev: UserFormState, form: FormData):
   if (problem) return { fieldErrors: { password: problem } };
   const user = await prisma.user.findUnique({ where: { id }, select: { username: true } });
   if (!user) return { error: "İstifadəçi tapılmadı" };
+  // Başqasının şifrəsini sıfırlayanda — həmin istifadəçi növbəti girişdə öz şifrəsini təyin etməlidir
+  const forceChange = id !== actor.id;
   await prisma.$transaction([
-    prisma.user.update({ where: { id }, data: { passwordHash: await hashPassword(password) } }),
+    prisma.user.update({ where: { id }, data: { passwordHash: await hashPassword(password), mustChangePassword: forceChange, ...(forceChange ? {} : { passwordChangedAt: new Date() }) } }),
     // Köhnə şifrə ilə açılmış sessiyalar etibarsız olur (öz sessiyası istisna)
     prisma.session.deleteMany({ where: { userId: id, ...(id === actor.id ? { NOT: { userId: actor.id } } : {}) } }),
   ]);
-  await audit({ user: actor, action: "PASSWORD_RESET", entity: "User", entityId: id, summary: `Şifrə yeniləndi: @${user.username}` });
+  await audit({ user: actor, action: "PASSWORD_RESET", entity: "User", entityId: id, summary: `Şifrə yeniləndi: @${user.username}${forceChange ? " (növbəti girişdə dəyişməlidir)" : ""}` });
   return { ok: true };
 }
