@@ -110,13 +110,18 @@ function SimpleTable<T>({ rows, columns, empty = "Məlumat yoxdur" }: { rows: T[
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: React.ReactNode; tone?: "success" | "warning" | "danger" | "primary" }) {
+/**
+ * compact — dosye başlığı üçün: mobildə (<sm) etiket solda, dəyər sağda bir sətirdə (3 dar kart əvəzinə),
+ * sm-dən yuxarıda — adi kart. Dəyər heç vaxt kartdan daşmır (nowrap + min-w-0, mobildə kiçik şrift).
+ */
+function Stat({ label, value, tone, compact }: { label: string; value: React.ReactNode; tone?: "success" | "warning" | "danger" | "primary"; compact?: boolean }) {
   return (
-    <div className="rounded-lg border p-4">
-      <div className="text-xs text-muted-foreground">{label}</div>
+    <div className={cn("min-w-0 rounded-lg border", compact ? "flex items-center justify-between gap-3 px-3 py-2 text-left sm:block sm:p-4 sm:text-center" : "p-3 sm:p-4")} data-stat>
+      <div className="min-w-0 text-xs text-muted-foreground">{label}</div>
       <div
         className={cn(
-          "mt-1 text-xl font-semibold tabular-nums",
+          "min-w-0 font-semibold tabular-nums",
+          compact ? "text-base whitespace-nowrap sm:mt-1 sm:text-lg xl:text-xl" : "mt-1 text-lg break-words sm:text-xl",
           tone === "success" && "text-success",
           tone === "warning" && "text-warning",
           tone === "danger" && "text-danger",
@@ -318,10 +323,10 @@ export function EmployeeDossier({
               )}
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-2 text-center sm:w-[440px]">
-            <Stat label="Ümumi staj" value={`${seniority.total.years} il`} tone="primary" />
-            <Stat label="Məzuniyyət hüququ" value={leave ? `${leave.total} gün` : "—"} tone="success" />
-            <Stat label="Netto maaş" value={payroll ? formatAzn(payroll.net) : "—"} />
+          <div className="grid grid-cols-1 gap-1.5 sm:w-[460px] sm:shrink-0 sm:grid-cols-3 sm:gap-2" data-header-stats>
+            <Stat compact label="Ümumi staj" value={`${seniority.total.years} il`} tone="primary" />
+            <Stat compact label="Məzuniyyət hüququ" value={leave ? `${leave.total} gün` : "—"} tone="success" />
+            <Stat compact label="Netto maaş" value={payroll ? formatAzn(payroll.net) : "—"} />
           </div>
         </CardContent>
       </Card>
@@ -789,17 +794,24 @@ export function EmployeeDossier({
             <Section title="Məzuniyyət hüququnun hesablanması" description={`İş ili: ${d(leave.periodStart)} – ${d(leave.periodEnd)}`} icon={PalmtreeIcon}>
               <div className="flex flex-col gap-2">
                 {[
-                  { label: leave.basicFromQuota ? "Əsas məzuniyyət (kvota üzrə)" : "Əsas məzuniyyət (vəzifə üzrə)", v: leave.basic },
-                  { label: "Staja görə əlavə (5–10 il: 2, 10–15 il: 4, 15+ il: 6)", v: leave.seniority },
-                  { label: "İş şəraitinə görə əlavə", v: leave.hazardous },
-                  { label: "14 yaşadək uşağı olan qadınlara", v: leave.motherhood },
+                  { label: "Əsas məzuniyyət", hint: leave.basicFromQuota ? "kvota üzrə" : "vəzifə üzrə", v: leave.basic },
+                  { label: "Staja görə əlavə", hint: "5–10 il: 2, 10–15 il: 4, 15+ il: 6", v: leave.seniority },
+                  { label: "İş şəraitinə görə əlavə", hint: null, v: leave.hazardous },
+                  { label: "14 yaşadək uşağı olan qadınlara", hint: null, v: leave.motherhood },
                 ].map((x) => (
-                  <div key={x.label} className="flex items-center gap-3">
-                    <span className="flex-1 text-sm">{x.label}</span>
-                    <div className="h-1.5 w-40 overflow-hidden rounded-full bg-muted">
+                  // Mobildə: etiket + dəyər bir sətirdə, izah kiçik ikinci sətirdə, zolaq altda tam enində; sm-dən — bir sətir
+                  <div key={x.label} className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3" data-leave-row>
+                    <div className="flex min-w-0 items-start justify-between gap-3 sm:flex-1">
+                      <div className="min-w-0">
+                        <div className="text-sm">{x.label}</div>
+                        {x.hint && <div className="text-xs text-muted-foreground">{x.hint}</div>}
+                      </div>
+                      <span className="shrink-0 text-sm font-medium whitespace-nowrap tabular-nums sm:hidden">{x.v} gün</span>
+                    </div>
+                    <div className="h-1.5 w-full shrink-0 overflow-hidden rounded-full bg-muted sm:w-40">
                       <div className="h-full rounded-full bg-success" style={{ width: `${(x.v / Math.max(1, leave.total)) * 100}%` }} />
                     </div>
-                    <span className="w-14 text-right text-sm font-medium tabular-nums">{x.v} gün</span>
+                    <span className="hidden w-14 shrink-0 text-right text-sm font-medium whitespace-nowrap tabular-nums sm:block">{x.v} gün</span>
                   </div>
                 ))}
                 <div className="mt-2 flex justify-between border-t pt-3 font-semibold">
