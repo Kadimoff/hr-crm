@@ -84,7 +84,8 @@ function SimpleTable<T>({ rows, columns, empty = "Məlumat yoxdur" }: { rows: T[
   if (rows.length === 0) return <p className="py-4 text-center text-sm text-muted-foreground">{empty}</p>;
   return (
     <div className="-mx-5 overflow-x-auto">
-      <table className="w-full text-sm">
+      {/* Telefonda cədvəl üfüqi sürüşür — dar sütunlarda sözlər bir-bir alt sətrə düşmürdü */}
+      <table className="w-full min-w-[34rem] text-sm sm:min-w-0">
         <thead>
           <tr className="border-y bg-muted/50 text-left text-xs text-muted-foreground">
             {columns.map((c) => (

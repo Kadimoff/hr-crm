@@ -367,7 +367,7 @@ export function StructureChart({ rows, departments, className }: { rows: Dashboa
       badge={<Chip>{data.length} bölmə</Chip>}
       header={
         <nav aria-label="Struktur səviyyəsi" className="mt-2 flex flex-wrap items-center gap-1 text-xs">
-          <button type="button" onClick={() => set("department", undefined)} className={cn("rounded px-1.5 py-0.5 hover:bg-muted", trail.length === 0 ? "font-medium text-foreground" : "text-primary")}>
+          <button type="button" onClick={() => set("department", undefined)} className={cn("rounded px-1.5 py-0.5 hover:bg-muted pointer-coarse:py-2", trail.length === 0 ? "font-medium text-foreground" : "text-primary")}>
             Bütün strukturlar
           </button>
           {trail.map((d, i) => (
@@ -376,7 +376,7 @@ export function StructureChart({ rows, departments, className }: { rows: Dashboa
               <button
                 type="button"
                 onClick={() => set("department", d.id)}
-                className={cn("rounded px-1.5 py-0.5 hover:bg-muted", i === trail.length - 1 ? "font-medium text-foreground" : "text-primary")}
+                className={cn("rounded px-1.5 py-0.5 hover:bg-muted pointer-coarse:py-2", i === trail.length - 1 ? "font-medium text-foreground" : "text-primary")}
               >
                 {d.name}
               </button>

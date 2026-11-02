@@ -715,7 +715,10 @@ export function OrgChart({
       if (!el || window.innerWidth >= 640) return setMapHeight(null);
       const top = el.getBoundingClientRect().top + window.scrollY;
       // 32 — <main>-in alt boşluğu (py-6) + kartın haşiyəsi: səhifə özü sürüşməsin
-      setMapHeight(Math.max(360, Math.round(window.innerHeight - top - 32)));
+      const h = Math.max(360, Math.round(window.innerHeight - top - 32));
+      // Dərhal DOM-a da yazılır: ilk «ekrana sığdır» düzgün hündürlüklə hesablansın
+      el.style.height = `${h}px`;
+      setMapHeight(h);
     };
     measure();
     window.addEventListener("resize", measure);
@@ -812,7 +815,7 @@ export function OrgChart({
         <div className="flex items-center gap-1">
           <span className="mr-1 hidden text-xs text-muted-foreground sm:inline">Səviyyə:</span>
           {[1, 2, 3, 4].map((lvl) => (
-            <Button key={lvl} variant="outline" size="sm" className="px-2.5 sm:px-3" onClick={() => setLevel(lvl)} title={`${lvl}-ci səviyyəyədək aç`} aria-label={`${lvl}-ci səviyyəyədək aç`}>
+            <Button key={lvl} variant="outline" size="sm" className="min-w-9 px-2.5 sm:px-3" onClick={() => setLevel(lvl)} title={`${lvl}-ci səviyyəyədək aç`} aria-label={`${lvl}-ci səviyyəyədək aç`}>
               {lvl}
             </Button>
           ))}

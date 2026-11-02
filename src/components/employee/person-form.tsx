@@ -259,7 +259,7 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
         )}
       </Section>
 
-      <div className="sticky bottom-0 z-10 -mx-4 flex flex-col gap-3 border-t bg-background/90 px-4 py-3 backdrop-blur-md sm:flex-row sm:items-center md:-mx-8 md:px-8">
+      <div className="sticky bottom-0 z-10 -mx-4 flex flex-col gap-3 border-t bg-background/90 px-4 py-3 backdrop-blur-md sm:flex-row sm:items-center lg:-mx-6 lg:px-6">
         {state.error ? <p className="text-sm text-danger">{state.error}</p> : <p className="text-xs text-muted-foreground">* — məcburi sahələr</p>}
         <div className="flex gap-2 sm:ml-auto">
           <Button variant="outline" asChild className="flex-1 sm:flex-none">

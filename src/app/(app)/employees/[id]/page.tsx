@@ -41,7 +41,7 @@ export default async function EmployeePage({ params, searchParams }: { params: P
         <SavedToast />
       </Suspense>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <Link href="/employees" className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
+        <Link href="/employees" className="-my-2 inline-flex items-center gap-1 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground pointer-coarse:py-3">
           <ChevronLeftIcon className="size-4" /> Əməkdaşlar
         </Link>
         <PersonToolbar id={p.id} name={p.fullName} canEdit={canEdit} archived={!!p.deletedAt} />
