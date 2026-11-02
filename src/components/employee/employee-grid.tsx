@@ -160,19 +160,28 @@ const SEARCH_DEBOUNCE_MS = 200;
 function SearchBox({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
   const [text, setText] = useState(value);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  /** Özümüzün göndərdiyi son dəyər — onun qayıtması sahəni sıfırlamamalıdır (yoxsa sonrakı hərflər itir) */
-  const committed = useRef(value);
+  /**
+   * Özümüzün göndərdiyimiz dəyərlər: onlar (gecikmiş keçid ilə, hətta köhnəsi sonradan) qayıdanda sahə sıfırlanmamalıdır —
+   * yoxsa zəif telefonda arada yazılmış hərflər itirdi.
+   */
+  const ours = useRef(new Set<string>());
+  const last = useRef(value);
   // Xaricdən dəyişəndə (Sıfırla, URL-dən bərpa) sahə də yenilənir
   useEffect(() => {
-    if (value !== committed.current) {
-      committed.current = value;
-      setText(value);
+    if (value === last.current) {
+      ours.current.clear(); // bütün göndərişlər tətbiq olunub
+      return;
     }
+    if (ours.current.has(value)) return; // köhnə göndəriş gec tətbiq olundu — yazılanı pozma
+    ours.current.clear();
+    last.current = value;
+    setText(value);
   }, [value]);
   useEffect(() => () => clearTimeout(timer.current), []);
   const commit = (v: string) => {
     clearTimeout(timer.current);
-    committed.current = v;
+    ours.current.add(v);
+    last.current = v;
     startTransition(() => onCommit(v));
   };
   return (

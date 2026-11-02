@@ -211,7 +211,7 @@ const MAX_LEVEL = 4;
 /** Axtarış yazı dayandıqdan sonra tətbiq olunur — hər hərfdə bütün xəritə yenidən qurulmur */
 const SEARCH_DEBOUNCE_MS = 220;
 /** Nəticə bundan çoxdursa xəritədə yalnız aktiv nəticənin yolu açılır (məs. «m» — bütün struktur + 640 kart açılırdı) */
-const SEARCH_OPEN_ALL_MAX = 30;
+const SEARCH_OPEN_ALL_MAX = 8;
 const dist = (a: Offset, b: Offset) => Math.hypot(a.x - b.x, a.y - b.y);
 const mid = (a: Offset, b: Offset) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
