@@ -26,6 +26,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Fragment, type ReactNode, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { can, type Permission } from "@/lib/auth/roles";
 import { findUnit, PERSONNEL_CATEGORIES, PERSONNEL_HREF, type UnitNode } from "@/lib/personnel";
 import type { SidebarSummary } from "@/lib/queries";
@@ -315,12 +316,18 @@ export function MobileNav({ role, summary }: { role: UserRole; summary: SidebarS
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   useEffect(() => setOpen(false), [pathname]);
+  // Menyu body-yə portal ilə çıxarılır: topbar-dakı backdrop-blur "fixed" elementlər üçün yeni konteyner yaradır
+  // və portalsız menyu yalnız başlıq hündürlüyündə (64px) qalırdı — mobil naviqasiya görünmürdü
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} aria-label="Menyu" className="rounded-lg bg-muted p-2 text-muted-foreground lg:hidden">
         <MenuIcon className="size-4" />
       </button>
+      {mounted &&
+        createPortal(
       <AnimatePresence>
         {open && (
           <>
@@ -342,7 +349,9 @@ export function MobileNav({ role, summary }: { role: UserRole; summary: SidebarS
             </motion.aside>
           </>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+          document.body,
+        )}
     </>
   );
 }
