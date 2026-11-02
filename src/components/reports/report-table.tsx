@@ -8,6 +8,11 @@ export function formatCell(col: ReportColumn, v: Cell): string {
 }
 
 /** Hesabat cədvəli — ekran (variant="screen") və çap (variant="print") üçün eyni struktur */
+/** Ekranda mətn sütununun minimal eni (Excel enindən): dar telefonda sözlər bir-bir alt sətrə düşməsin */
+const screenMinWidth = (c: ReportColumn) => Math.min(240, Math.max(64, (c.width ?? 12) * 6.5));
+/** Qısa kodlar (ASU-0539, 68.1) defisdən bölünməsin */
+const noWrap = (c: ReportColumn) => (c.width ?? 12) <= 12;
+
 export function ReportTable({ result, variant = "screen" }: { result: ReportResult; variant?: "screen" | "print" }) {
   const print = variant === "print";
   const num = (c: ReportColumn) => c.type === "number" || c.type === "money";
@@ -20,6 +25,7 @@ export function ReportTable({ result, variant = "screen" }: { result: ReportResu
           {result.columns.map((c) => (
             <th
               key={c.key}
+              style={print || num(c) ? undefined : { minWidth: screenMinWidth(c) }}
               className={cn(
                 "font-medium",
                 print ? "border border-neutral-400 bg-neutral-100 px-1.5 py-1 font-semibold" : "h-10 border-b bg-muted px-3 text-xs whitespace-nowrap text-muted-foreground",
@@ -37,7 +43,7 @@ export function ReportTable({ result, variant = "screen" }: { result: ReportResu
             {result.columns.map((c) => (
               <td
                 key={c.key}
-                className={cn(print ? "border border-neutral-400 px-1.5 py-0.5" : "border-b px-3 py-2", num(c) && "text-right whitespace-nowrap tabular-nums", r[c.key] == null && !print && "text-muted-foreground/70")}
+                className={cn(print ? "border border-neutral-400 px-1.5 py-0.5" : "border-b px-3 py-2", num(c) && "text-right whitespace-nowrap tabular-nums", !print && noWrap(c) && "whitespace-nowrap", r[c.key] == null && !print && "text-muted-foreground/70")}
               >
                 {formatCell(c, r[c.key] ?? null)}
               </td>

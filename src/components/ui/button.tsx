@@ -17,10 +17,11 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
-        lg: "h-10 rounded-md px-6",
-        icon: "size-9",
+        // pointer-coarse — toxunma ekranı: barmaq üçün hündür düymələr (siçanlı ekranda dəyişmir)
+        default: "h-9 px-4 py-2 pointer-coarse:h-10",
+        sm: "h-8 rounded-md px-3 text-xs pointer-coarse:h-9",
+        lg: "h-10 rounded-md px-6 pointer-coarse:h-11",
+        icon: "size-9 pointer-coarse:size-10",
       },
     },
     defaultVariants: { variant: "default", size: "default" },

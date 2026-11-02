@@ -85,7 +85,7 @@ export function DateInput({ value, defaultValue = "", onChange, name, className,
           if (text && !toIso(text)) setText(toDisplay(iso));
         }}
         className={cn(
-          "flex h-9 w-full min-w-0 rounded-md border border-input bg-card py-1 pr-9 pl-3 text-sm tabular-nums shadow-xs outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30 disabled:opacity-50",
+          "flex h-9 w-full min-w-0 rounded-md border border-input bg-card py-1 pr-9 pl-3 text-sm tabular-nums shadow-xs pointer-coarse:h-10 pointer-coarse:text-base outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30 disabled:opacity-50",
           invalid && "border-danger",
         )}
       />
@@ -109,7 +109,7 @@ export function DateInput({ value, defaultValue = "", onChange, name, className,
         disabled={disabled}
         onClick={() => picker.current?.showPicker?.()}
         aria-label="Təqvimdən seç"
-        className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+        className="absolute top-1/2 right-1 -translate-y-1/2 rounded p-1 pointer-coarse:p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
       >
         <CalendarIcon className="size-4" />
       </button>

@@ -27,13 +27,13 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
         description={user.role === "DEPT_HEAD" ? `${user.departmentName ?? "Bölmə"} və alt bölmələri üzrə` : "Ekranda baxış, Excel ixracı və çap — bütün ixrac və çaplar audit jurnalına yazılır"}
       />
       <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
-        <nav className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
+        <nav className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0">
           {REPORTS.map((r) => (
             <Link
               key={r.key}
               href={`/reports?r=${r.key}`}
               className={cn(
-                "min-w-48 shrink-0 rounded-lg border px-3 py-2.5 transition-colors lg:min-w-0",
+                "w-60 shrink-0 rounded-lg border px-3 py-2.5 transition-colors lg:w-auto",
                 r.key === report.key ? "border-primary/50 bg-accent" : "bg-card hover:bg-muted",
               )}
             >
@@ -52,7 +52,8 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
               <ReportParams reportKey={report.key} params={report.params} defaults={defaults} />
             </Suspense>
           </div>
-          <div className="max-h-[calc(100dvh-20rem)] overflow-auto">
+          {/* Telefonda daxili şaquli sürüşmə yoxdur (səhifə özü sürüşür) — yalnız üfüqi */}
+          <div className="overflow-auto md:max-h-[calc(100dvh-20rem)]">
             <ReportTable result={result} />
           </div>
         </Card>

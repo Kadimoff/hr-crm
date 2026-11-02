@@ -14,7 +14,7 @@ export function UserMenu({ user }: { user: CurrentUser }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="h-9 gap-2 px-1.5 sm:px-2" aria-label="İstifadəçi menyusu">
+        <Button variant="ghost" className="h-9 gap-2 px-1.5 sm:px-2 pointer-coarse:h-10" aria-label="İstifadəçi menyusu">
           <span className="flex size-7 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">{initials(user.fullName)}</span>
           <span className="hidden text-left leading-tight lg:block">
             <span className="block text-sm font-medium">{user.fullName}</span>
