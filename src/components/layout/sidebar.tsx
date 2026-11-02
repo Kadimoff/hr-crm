@@ -30,6 +30,7 @@ import { createPortal } from "react-dom";
 import { can, type Permission } from "@/lib/auth/roles";
 import { findUnit, PERSONNEL_CATEGORIES, PERSONNEL_HREF, type UnitNode } from "@/lib/personnel";
 import type { SidebarSummary } from "@/lib/queries";
+import { useBackToClose } from "@/lib/use-back-close";
 import { cn, formatDateTime, formatNumber } from "@/lib/utils";
 
 export const NAV: { href: string; label: string; description: string; group: string; icon: typeof UsersIcon; permission?: Permission }[] = [
@@ -215,7 +216,7 @@ function SidebarContent({ role, summary, onClose }: { role: UserRole; summary: S
           <div className="text-[11px] font-medium text-blue-400">HR CRM · Kadr və əməkhaqqı sistemi</div>
         </Link>
         {onClose && (
-          <button type="button" onClick={onClose} aria-label="Menyunu bağla" className="p-1 text-sidebar-muted hover:text-white">
+          <button type="button" onClick={onClose} aria-label="Menyunu bağla" className="-m-2 flex size-10 items-center justify-center text-sidebar-muted hover:text-white">
             <XIcon className="size-5" />
           </button>
         )}
@@ -316,6 +317,8 @@ export function MobileNav({ role, summary }: { role: UserRole; summary: SidebarS
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   useEffect(() => setOpen(false), [pathname]);
+  // Android «Geri» — menyunu bağlayır, əvvəlki səhifəyə keçmir
+  useBackToClose(open, () => setOpen(false));
   // Menyu body-yə portal ilə çıxarılır: topbar-dakı backdrop-blur "fixed" elementlər üçün yeni konteyner yaradır
   // və portalsız menyu yalnız başlıq hündürlüyündə (64px) qalırdı — mobil naviqasiya görünmürdü
   const [mounted, setMounted] = useState(false);
@@ -323,7 +326,7 @@ export function MobileNav({ role, summary }: { role: UserRole; summary: SidebarS
 
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} aria-label="Menyu" className="rounded-lg bg-muted p-2 text-muted-foreground lg:hidden">
+      <button type="button" onClick={() => setOpen(true)} aria-label="Menyu" aria-expanded={open} className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground lg:hidden">
         <MenuIcon className="size-4" />
       </button>
       {mounted &&

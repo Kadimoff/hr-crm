@@ -331,7 +331,7 @@ export function EmployeeDossier({
         </CardContent>
       </Card>
 
-      <Tabs defaultValue={tab && TABS.includes(tab) ? tab : "personal"}>
+      <Tabs defaultValue={tab && TABS.includes(tab) ? tab : "personal"} urlParam="tab">
         <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="personal">
             <UserIcon /> Şəxsi

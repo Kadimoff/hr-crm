@@ -22,9 +22,12 @@ export function SavedToast() {
   useEffect(() => {
     if (saved && FLASH[saved]) {
       toast.success(FLASH[saved]);
-      router.replace(pathname, { scroll: false });
+      // Yalnız «saved» götürülür — digər parametrlər (məs. ?tab=) qalır
+      const rest = new URLSearchParams(params);
+      rest.delete("saved");
+      router.replace(rest.size ? `${pathname}?${rest}` : pathname, { scroll: false });
     }
-  }, [saved, pathname, router]);
+  }, [saved, pathname, router, params]);
   return null;
 }
 
@@ -43,7 +46,7 @@ export function DeletePersonDialog({ id, name }: { id: string; name: string }) {
       const res = await archivePersonAction(id, text);
       if (res.error) return setError(res.error);
       toast.success(`${name} silindi (arxivə köçürüldü)`);
-      setOpen(false);
+      // Dialoq bağlanmır — keçidlə birlikdə yox olur (əvvəl bağlansa, «geri» qeydinin silinməsi keçidi ləğv edərdi)
       router.push("/employees");
     });
   };

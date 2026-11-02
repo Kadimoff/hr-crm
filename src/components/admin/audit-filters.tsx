@@ -20,20 +20,22 @@ export function AuditFilters({ users, actions, entities }: { users: string[]; ac
   const params = useSearchParams();
   const [q, setQ] = useState(params.get("q") ?? "");
 
-  const update = (patch: Record<string, string | undefined>) => {
+  /** replace — axtarışa yazarkən hər pauza tarixçəyə ayrıca qeyd yazmasın (mobil «geri» onları bir-bir gəzirdi) */
+  const update = (patch: Record<string, string | undefined>, replace = false) => {
     const next = new URLSearchParams(params);
     for (const [k, v] of Object.entries(patch)) {
       if (v) next.set(k, v);
       else next.delete(k);
     }
     next.delete("page");
-    router.push(`${pathname}?${next}`);
+    if (replace) router.replace(`${pathname}?${next}`, { scroll: false });
+    else router.push(`${pathname}?${next}`);
   };
 
   // Axtarış sahəsi — yazmağı bitirdikdən 400 ms sonra tətbiq olunur
   useEffect(() => {
     if (q === (params.get("q") ?? "")) return;
-    const t = setTimeout(() => update({ q: q.trim() || undefined }), 400);
+    const t = setTimeout(() => update({ q: q.trim() || undefined }, true), 400);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);

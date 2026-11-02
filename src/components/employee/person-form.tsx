@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { PersonFormOptions } from "@/lib/queries";
+import { useUnsavedChangesGuard } from "@/lib/use-unsaved-guard";
 import { cn } from "@/lib/utils";
 
 const NONE = "__none__";
@@ -123,7 +124,15 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
   const set = (k: string) => (val: string) => {
     setSelects((s) => ({ ...s, [k]: val }));
     touch(k);
+    setDirty(true);
   };
+  // Saxlanılmamış dəyişiklik: «geri», keçid və ya yeniləmə zamanı təsdiq soruşulur
+  const [dirty, setDirty] = useState(false);
+  useUnsavedChangesGuard(dirty);
+  // Göndərişdən sonra xəta qayıdıbsa — dəyişikliklər hələ saxlanılmayıb
+  useEffect(() => {
+    if (state.error || state.fieldErrors) setDirty(true);
+  }, [state]);
   // Sahə dəyişən kimi onun xəta mesajı gizlənir; yeni göndərişdən sonra yenidən hesablanır
   const [touched, setTouched] = useState<Set<string>>(new Set());
   useEffect(() => setTouched(new Set()), [state]);
@@ -134,6 +143,7 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
   const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const data = new FormData(e.currentTarget);
+    setDirty(false);
     startTransition(() => formAction(data));
   };
 
@@ -156,6 +166,7 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
         // DateInput-un görünən sahəsinin adı data-field-dədir
         const t = e.target as unknown as HTMLInputElement;
         touch(t.name || t.dataset.field || "");
+        setDirty(true);
       }} className="flex flex-col gap-6" noValidate>
       {editing && <input type="hidden" name="id" value={v("id")} />}
       {editing && <input type="hidden" name="updatedAt" value={v("updatedAt")} />}
