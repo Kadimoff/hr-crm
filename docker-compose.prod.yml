@@ -10,6 +10,10 @@ services:
       REDIS_URL: redis://redis:6379
       APP_URL: ${APP_URL:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # Tətbiq etibarlı reverse proxy (Traefik, nginx) arxasındadırsa — proxy sayı; birbaşa portda 0 (X-Forwarded-For nəzərə alınmır)
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
+      # Verilsə, avtomatik backup-ların AES-256-GCM ilə şifrəli nüsxəsi storage/backups/offsite-a yazılır (README → Server xaricində backup)
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
     volumes:
       - storage:/app/storage
     ports:

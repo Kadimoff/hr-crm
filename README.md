@@ -57,6 +57,9 @@ POSTGRES_PASSWORD='güclü-şifrə' APP_URL='https://hr.example.az' docker compo
 | `APP_URL` | Sistemin xarici ünvanı — çap və Excel-dəki QR kod / linklər bunu göstərir |
 | `COOKIE_SECURE` | HTTPS arxasında `true` (defolt) |
 | `APP_PORT` | Host portu (defolt 3000) |
+| `TRUSTED_PROXY_HOPS` | Tətbiqin qarşısındakı etibarlı reverse proxy-lərin sayı (defolt `0` — birbaşa port). `0`-da klient IP-si TCP soketdən götürülür, `X-Forwarded-For` nəzərə alınmır (saxtalaşdırıla bilməz); Traefik/nginx arxasında `1` |
+| `BACKUP_ENCRYPTION_KEY` | İstəyə görə — 32 baytlıq açar (`openssl rand -hex 32`). Verilsə, avtomatik backup-ların şifrəli nüsxəsi yazılır (aşağıda) |
+| `BACKUP_OFFSITE_DIR` | Şifrəli nüsxələrin qovluğu (defolt `storage/backups/offsite`) |
 
 - **Volume-lar**: `storage` (şəxsi iş sənədləri, backup `.zip`-lər, idxal faylları — app və worker ortaq istifadə edir), `pgdata`, `redisdata`. `storage` itərsə sənəd faylları itir — server backup-ına daxil edin.
 - **Sağlamlıq yoxlaması**: `GET /api/health` (giriş tələb etmir, bazanı yoxlayır).
@@ -71,6 +74,23 @@ Sistem serverdə Coolify layihəsi **HR CRM** → tətbiq **hr-crm** kimi işlə
 - **Gecə backup-ı:** `hr-crm-backup.timer` hər gün 03:45. Saxlanılır: son 10 deploy və son 14 gecə backup-ı; əl ilə alınanlar silinmir.
 - Yarımçıq işi ayrıca budaqda saxlayın — `main`-ə düşən hər commit canlıya çıxır. Deploy zamanı tətbiq bir neçə saniyə yenidən başlayır.
 - Loqlar: `journalctl -u hr-crm-autodeploy -n 50`, `journalctl -u hr-crm-backup -n 20`.
+
+### Server xaricində backup (tövsiyə)
+
+Hazırda backup-lar (`storage/backups`) tətbiqin özü ilə **eyni serverdədir** — disk sıradan çıxsa və ya server itirilsə, backup-lar da itir.
+Ən azı gecə backup-larının bir nüsxəsini başqa yerə (S3-uyğun saxlama, başqa server) göndərmək tövsiyə olunur:
+
+1. Açar yaradın və **ayrıca, təhlükəsiz yerdə** saxlayın (parol meneceri, seyf): `openssl rand -hex 32`. Açar itərsə şifrəli nüsxələr açılmır.
+2. Coolify-da tətbiqin mühit dəyişənlərinə `BACKUP_ENCRYPTION_KEY=<açar>` əlavə edin. Bundan sonra `npm run backup -- deploy|nightly`
+   əsas `.zip`-dən əlavə onun AES-256-GCM ilə şifrələnmiş nüsxəsini `storage/backups/offsite/<ad>.zip.enc` kimi yazır
+   (köhnələri eyni qayda ilə silinir: 10 deploy, 14 gecə). Serverdəki əsas backup-lar və onların bərpası dəyişmir.
+3. Host-da `offsite` qovluğunu xarici yerə sinxronlaşdırın — məs. `hr-crm-backup.service`-dən sonra
+   `rclone copy <volume>/backups/offsite remote:hr-crm-backups` (və ya `rsync`/`scp` başqa serverə). Fayllar artıq şifrəlidir —
+   xarici tərəf məzmunu görmür.
+4. Bərpa: `.zip.enc` faylını **Verilənlər bazası → Fayldan yüklə** ilə birbaşa yükləyin (serverdə eyni açar təyin edilibsə, server özü açır)
+   və ya əvvəlcə açın: `BACKUP_ENCRYPTION_KEY=… npm run backup:decrypt -- backup-….zip.enc` → adi `.zip`.
+
+Format: `HRCRMENC1` imzası · 12 bayt IV · şifrəmətn · 16 bayt GCM auth tag — fayl dəyişdirilibsə və ya açar səhvdirsə açılmır.
 
 ## Struktur
 
@@ -108,10 +128,28 @@ Təlimatdan götürülən qaydalar:
 Fayl adı nömrə ilə başlayırsa (`3 Məzuniyyətlərin qalıqları.xlsx`) şablon avtomatik təyin olunur; əks halda sihirbazda seçilir.
 Boş şablonlar İdxal mərkəzindəki **Boş şablonlar** menyusundan yüklənə bilər.
 
+## Hesablar və giriş təhlükəsizliyi
+
+- Root yeni istifadəçi yaradanda və ya başqasının şifrəsini sıfırlayanda həmin istifadəçi **növbəti girişdə şifrəsini dəyişməlidir** —
+  o vaxta qədər yalnız «Şifrəni dəyiş» səhifəsi açılır, server action və API sorğuları rədd edilir. Hər kəs şifrəsini istifadəçi
+  menyusundan (**Şifrəni dəyiş**) dəyişə bilər; dəyişiklikdən sonra digər brauzer/kompüterlərdəki sessiyalar bağlanır, audit jurnalına yazılır.
+- Brute-force limiti: eyni IP-dən eyni istifadəçi adına 15 dəqiqədə 5 uğursuz cəhd, eyni IP-dən istənilən adlara 20 uğursuz cəhd.
+  Kilid «istifadəçi + IP» cütünə bağlıdır — başqa ünvandan edilən cəhdlər hesabın sahibini (məs. root-u) kilidləmir.
+  IP TCP soketdən götürülür (`TRUSTED_PROXY_HOPS`, yuxarıda).
+
+## Kadr hərəkəti (köçürmə, oklad dəyişikliyi)
+
+Mövcud müqavilədə bölmə, vəzifə, oklad və ya ştat payı dəyişikliyi **əmr əsasında** qeydə alınır: əmrin nömrəsi, tarixi və qüvvəyə minmə tarixi
+(dosye → «Müqavilə və maaş» → **Köçürmə / maaş dəyişikliyi**; tam redaktə formasında və struktur xəritəsinin panelində bu sahələr dəyişəndə
+əmr sahələri avtomatik açılır). Müqavilə yeni vəziyyətə keçir, «əvvəl → sonra» `EmploymentMovement` cədvəlində saxlanılır, oklad tarixçəsi
+(`SalaryRecord`) qüvvəyə minmə tarixindən bağlanır/açılır, hərəkət **Kadr hərəkəti** hesabatında görünür. Qüvvəyə minmə tarixi gələcəkdə ola bilməz.
+
 ## Konfiqurasiya edilən qaydalar
 
 Aşağıdakı dəyərlər kodda bir yerdə saxlanılır və istifadəyə verilməzdən əvvəl hüquq/mühasibatlıq tərəfindən təsdiqlənməlidir:
 
-- `src/lib/calc/payroll.ts → DEFAULT_PAYROLL_CONFIG` — gəlir vergisi pillələri (dövlət sektoru), VM 102.2 güzəşt məbləğləri, DSMF / işsizlik / İTS dərəcələri, **elmi dərəcə və elmi ada görə əlavələrin məbləğləri**
+- `src/lib/calc/payroll.ts → DEFAULT_PAYROLL_CONFIG` — gəlir vergisi pillələri (dövlət sektoru), VM 102.2 güzəşt məbləğləri, DSMF / işsizlik / İTS dərəcələri, **elmi dərəcə və elmi ada görə əlavələrin məbləğləri**.
+  Güzəştlər (200 AZN azad məbləğ, VM 102.2) və elmi dərəcə/ad əlavələri şəxsə **bir dəfə — əsas iş yeri müqaviləsində** tətbiq olunur, əlavələr ştat payına
+  mütənasibdir (0.5 ştat → yarısı); əvəzçilikdə yalnız oklad və zərərli şərait əlavəsi. Oklad müqavilədə ştat payı daxil olmaqla saxlanılır.
 - `src/lib/calc/seniority.ts → DEFAULT_SENIORITY_CONFIG` — iş ilində stajdan çıxılmayan ödənişsiz məzuniyyət həddi (defolt 14 gün)
 - `src/lib/validation/templates.ts` — sütun başlıqları və onların alternativ yazılışları (real şablonların başlıqlarına uyğunlaşdırılmalıdır)

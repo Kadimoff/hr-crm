@@ -11,6 +11,7 @@
     "start": "next start",
     "worker": "tsx --env-file=.env src/workers/import-worker.ts",
     "backup": "NODE_OPTIONS=--conditions=react-server tsx scripts/backup.ts",
+    "backup:decrypt": "tsx scripts/backup-decrypt.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "db:generate": "prisma generate",

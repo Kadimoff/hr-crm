@@ -7,6 +7,7 @@ import { gunzipSync } from "node:zlib";
 import { Prisma } from "@prisma/client";
 import archiver from "archiver";
 import { Open } from "unzipper";
+import { encryptFile, parseEncryptionKey } from "@/lib/backup-crypto";
 import { prisma } from "@/lib/db";
 import { DOCUMENTS_DIR } from "@/lib/documents";
 
@@ -217,6 +218,32 @@ export async function pruneBackups(reason: keyof typeof KEEP): Promise<string[]>
   const old = (await listBackups()).filter((b) => b.name.endsWith(`-${reason}.zip`)).slice(KEEP[reason]);
   for (const b of old) await unlink(path.join(BACKUP_DIR, b.name)).catch(() => undefined);
   return old.map((b) => b.name);
+}
+
+/** Server xaricinə göndəriləcək şifrəli nüsxələrin qovluğu (host-dakı sinxronizasiya — rclone / rsync — buradan götürür) */
+export const OFFSITE_DIR = path.resolve(process.env.BACKUP_OFFSITE_DIR ?? path.join(BACKUP_DIR, "offsite"));
+
+/**
+ * BACKUP_ENCRYPTION_KEY təyin edilibsə: backup-ın AES-256-GCM ilə şifrələnmiş nüsxəsi OFFSITE_DIR/<ad>.enc,
+ * həmin növün köhnə nüsxələri KEEP qaydası ilə silinir. Açar yoxdursa — heç nə etmir (null).
+ * Serverdəki əsas (şifrəsiz) backup və onun bərpası dəyişmir.
+ */
+export async function writeEncryptedCopy(name: string, reason: keyof typeof KEEP): Promise<{ path: string; removed: string[] } | null> {
+  const key = parseEncryptionKey(process.env.BACKUP_ENCRYPTION_KEY);
+  const src = backupPath(name);
+  if (!key || !src) return null;
+  await mkdir(OFFSITE_DIR, { recursive: true });
+  const target = path.join(OFFSITE_DIR, `${name}.enc`);
+  const tmp = `${target}.tmp`;
+  await encryptFile(src, tmp, key);
+  await rename(tmp, target);
+  const old = (await readdir(OFFSITE_DIR))
+    .filter((n) => n.endsWith(`-${reason}.zip.enc`) && BACKUP_NAME.test(n.slice(0, -4)))
+    .sort()
+    .reverse()
+    .slice(KEEP[reason]);
+  for (const n of old) await unlink(path.join(OFFSITE_DIR, n)).catch(() => undefined);
+  return { path: target, removed: old };
 }
 
 /** Yol keçidinə (../) qarşı: yalnız backup adı formatına uyğun fayllar */

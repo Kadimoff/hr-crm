@@ -155,7 +155,7 @@ export function DatabaseAdmin({ counts, backups }: { counts: Record<string, numb
             <input
               ref={fileRef}
               type="file"
-              accept=".zip,.gz,application/zip,application/gzip"
+              accept=".zip,.gz,.enc,application/zip,application/gzip"
               hidden
               onChange={(e) => {
                 const f = e.target.files?.[0];
