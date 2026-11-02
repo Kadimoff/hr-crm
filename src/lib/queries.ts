@@ -450,6 +450,8 @@ export async function getPersonFormValues(id: string): Promise<Record<string, st
   const main = active.find((e) => e.isPrimary) ?? active[0] ?? p.employments[0];
   return {
     id: p.id,
+    // Eyni vaxtda redaktə: forma açılanda olan versiya — yadda saxlayanda yoxlanılır
+    updatedAt: p.updatedAt.toISOString(),
     code: p.code,
     lastName: p.lastName,
     firstName: p.firstName,

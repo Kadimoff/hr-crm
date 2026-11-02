@@ -227,7 +227,7 @@ export function DatabaseAdmin({ counts, backups }: { counts: Record<string, numb
                       submitLabel="Bərpa et"
                       onDone={afterRestore}
                     />
-                    <Button variant="ghost" size="sm" className="text-danger" disabled={busy} onClick={() => run(() => deleteBackupAction(b.name))} aria-label={`${b.name} faylını sil`}>
+                    <Button variant="ghost" size="sm" className="text-danger" disabled={busy} onClick={() => window.confirm(`${b.name} faylı silinsin? Bu backup geri qaytarılmır.`) && run(() => deleteBackupAction(b.name))} aria-label={`${b.name} faylını sil`}>
                       <Trash2Icon />
                     </Button>
                   </div>

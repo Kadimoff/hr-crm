@@ -10,7 +10,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ key: st
   const user = await apiUser();
   if (user instanceof Response) return user;
   const { key } = await params;
-  if (!(key in TEMPLATES)) return new Response("Şablon tapılmadı", { status: 404 });
+  if (!Object.hasOwn(TEMPLATES, key)) return new Response("Şablon tapılmadı", { status: 404 });
   const template = TEMPLATES[key as TemplateKey];
 
   const wb = new ExcelJS.Workbook();

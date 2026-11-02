@@ -34,6 +34,8 @@ const optDate = z.preprocess(blank, isoDate.optional());
 const formSchema = z
   .object({
     id: optStr,
+    /** Formanın açıldığı andakı Person.updatedAt (ISO) — başqasının dəyişikliyinin üstündən yazmamaq üçün */
+    updatedAt: optStr,
     code: z.preprocess(blank, z.string().trim().regex(/^\S{1,32}$/, "Kod boşluqsuz olmalıdır (ən çox 32 simvol)").optional()),
     lastName: reqStr("Soyadı"),
     firstName: reqStr("Adı"),
@@ -84,6 +86,8 @@ const formSchema = z
   });
 
 type FormValues = z.infer<typeof formSchema>;
+
+const CONFLICT_MESSAGE = "Bu əməkdaşın məlumatlarını siz formanı açandan sonra başqa istifadəçi dəyişib. Dəyişikliklərinizi qeyd edin, səhifəni yeniləyin və yenidən daxil edin.";
 
 const UNIQUE_FIELD_MESSAGES: Record<string, string> = {
   code: "Bu kodla əməkdaş artıq mövcuddur",
@@ -196,7 +200,13 @@ export async function savePersonAction(_prev: PersonFormState, form: FormData): 
         data,
       );
       if (v.code && v.code !== before.code) changes.code = [before.code, v.code];
-      await tx.person.update({ where: { id: v.id }, data: { ...data, ...(v.code ? { code: v.code } : {}), updatedById: user.id } });
+      // Optimistik kilid: forma açılandan sonra başqa istifadəçi dəyişibsə — üstündən yazılmır
+      const expected = v.updatedAt ? new Date(v.updatedAt) : null;
+      const updated = await tx.person.updateMany({
+        where: { id: v.id, deletedAt: null, ...(expected && !Number.isNaN(expected.getTime()) ? { updatedAt: expected } : {}) },
+        data: { ...data, ...(v.code ? { code: v.code } : {}), updatedById: user.id },
+      });
+      if (updated.count === 0) throw new Error(CONFLICT_MESSAGE);
 
       if (emp) {
         const current = v.employmentId ? before.employments.find((e) => e.id === v.employmentId) : undefined;

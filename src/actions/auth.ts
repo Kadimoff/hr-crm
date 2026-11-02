@@ -15,8 +15,8 @@ export interface FormState {
 const MAX_FAILED = 5;
 const LOCK_WINDOW_MS = 15 * 60 * 1000;
 
-/** Yalnız daxili yollara yönləndirmə (open redirect qarşısı) */
-const safeNext = (v: FormDataEntryValue | null) => (typeof v === "string" && v.startsWith("/") && !v.startsWith("//") ? v : "/dashboard");
+/** Yalnız daxili yollara yönləndirmə (open redirect qarşısı); "/\\host" brauzerdə "//host" kimi açılır — rədd edilir */
+const safeNext = (v: FormDataEntryValue | null) => (typeof v === "string" && v.startsWith("/") && !v.startsWith("//") && !v.includes("\\") ? v : "/dashboard");
 
 export async function loginAction(_prev: FormState, form: FormData): Promise<FormState> {
   const username = String(form.get("username") ?? "").trim().toLowerCase();

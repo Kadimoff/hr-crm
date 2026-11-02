@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   const rejected: { name: string; reason: string }[] = [];
   for (const file of files) {
     const override = form.get(`template:${file.name}`);
-    const key = (typeof override === "string" && override in TEMPLATES ? override : detectTemplateByName(file.name)) as TemplateKey | null;
+    const key = (typeof override === "string" && Object.hasOwn(TEMPLATES, override) ? override : detectTemplateByName(file.name)) as TemplateKey | null;
     if (!file.name.toLowerCase().endsWith(".xlsx")) rejected.push({ name: file.name, reason: "Yalnız .xlsx faylları qəbul olunur" });
     else if (file.size > MAX_FILE_BYTES) rejected.push({ name: file.name, reason: "Fayl 50 MB-dan böyükdür" });
     else if (!key) rejected.push({ name: file.name, reason: "Şablon təyin edilmədi — fayl adı 1–10 nömrə ilə başlamalıdır" });

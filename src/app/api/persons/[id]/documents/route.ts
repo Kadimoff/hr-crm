@@ -26,7 +26,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const form = await request.formData();
   const files = form.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
   const kind = (field(form, "kind") ?? "DIGER") as DocumentKind;
-  if (!(kind in DOCUMENT_KINDS)) return NextResponse.json({ error: "Sənədin növü düzgün deyil" }, { status: 400 });
+  if (!Object.hasOwn(DOCUMENT_KINDS, kind)) return NextResponse.json({ error: "Sənədin növü düzgün deyil" }, { status: 400 });
   if (files.length === 0) return NextResponse.json({ error: "Fayl seçilməyib" }, { status: 400 });
   const date = field(form, "date") ?? new Date().toISOString().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return NextResponse.json({ error: "Tarix düzgün deyil" }, { status: 400 });

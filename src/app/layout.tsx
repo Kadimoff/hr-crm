@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import { ChunkReloadListener } from "@/components/chunk-reload-listener";
 import { ThemedToaster, ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
@@ -19,6 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ThemeProvider>
           <TooltipProvider delayDuration={150}>{children}</TooltipProvider>
           <ThemedToaster />
+          <ChunkReloadListener />
         </ThemeProvider>
       </body>
     </html>

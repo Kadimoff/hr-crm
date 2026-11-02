@@ -147,6 +147,7 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
         touch(t.name || t.dataset.field || "");
       }} className="flex flex-col gap-6" noValidate>
       {editing && <input type="hidden" name="id" value={v("id")} />}
+      {editing && <input type="hidden" name="updatedAt" value={v("updatedAt")} />}
       <input type="hidden" name="employmentId" value={v("employmentId")} />
 
       <Section icon={UserIcon} title="Şəxsi məlumatlar">
