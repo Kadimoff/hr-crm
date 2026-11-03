@@ -38,7 +38,16 @@ const createSchema = withDepartmentRule(
 );
 
 const checkbox = z.preprocess((v) => v === "on" || v === "true", z.boolean());
-const updateSchema = withDepartmentRule(baseSchema.extend({ id: z.string().min(1), isActive: checkbox, canDeleteDocuments: checkbox }));
+const updateSchema = withDepartmentRule(
+  baseSchema.extend({
+    id: z.string().min(1),
+    isActive: checkbox,
+    canDeleteDocuments: checkbox,
+    /** Maaş məxfiliyi: hesabın sahibi olan əməkdaşın kodu (boş — bağlantı yoxdur) */
+    personCode: z.preprocess(blank, z.string().trim().max(64).optional()),
+    canViewRestrictedSalaries: checkbox,
+  }),
+);
 
 const fieldErrors = (e: z.ZodError) => {
   const out: Record<string, string> = {};
@@ -88,8 +97,18 @@ export async function updateUserAction(_prev: UserFormState, form: FormData): Pr
   const { id, fullName, role, departmentId, isActive } = parsed.data;
   // Root həmişə birbaşa silir — bayraq yalnız digər rollar üçündür
   const canDeleteDocuments = role !== "ROOT" && parsed.data.canDeleteDocuments;
+  // Məxfi maaşları görmək: yalnız kadr əməkdaşına verilir (root həmişə görür, şöbə rəhbəri heç vaxt)
+  const canViewRestrictedSalaries = role === "HR" && parsed.data.canViewRestrictedSalaries;
+  // «personCode» — «Kod — Ad» siyahısından seçilib: kod birinci hissədir
+  const code = parsed.data.personCode?.split(/\s+—\s+/)[0]?.trim();
+  const person = code ? await prisma.person.findUnique({ where: { code }, select: { id: true, fullName: true, code: true } }) : null;
+  if (code && !person) return { fieldErrors: { personCode: "Bu kodla əməkdaş tapılmadı" } };
+  if (person) {
+    const taken = await prisma.user.findFirst({ where: { personId: person.id, id: { not: id } }, select: { username: true } });
+    if (taken) return { fieldErrors: { personCode: `Bu əməkdaş artıq @${taken.username} hesabına bağlıdır` } };
+  }
 
-  const before = await prisma.user.findUnique({ where: { id }, include: { department: { select: { name: true } } } });
+  const before = await prisma.user.findUnique({ where: { id }, include: { department: { select: { name: true } }, person: { select: { code: true, fullName: true } } } });
   if (!before) return { error: "İstifadəçi tapılmadı" };
   if (id === actor.id && (role !== "ROOT" || !isActive)) return { error: "Öz hesabınızın rolunu dəyişə və ya onu deaktiv edə bilməzsiniz" };
   if (before.role === "ROOT" && (role !== "ROOT" || !isActive)) {
@@ -100,16 +119,34 @@ export async function updateUserAction(_prev: UserFormState, form: FormData): Pr
   const after = await prisma.$transaction(async (tx) => {
     const u = await tx.user.update({
       where: { id },
-      data: { fullName, role, isActive, canDeleteDocuments, departmentId: role === "DEPT_HEAD" ? departmentId : null },
-      include: { department: { select: { name: true } } },
+      data: { fullName, role, isActive, canDeleteDocuments, departmentId: role === "DEPT_HEAD" ? departmentId : null, personId: person?.id ?? null, canViewRestrictedSalaries },
+      include: { department: { select: { name: true } }, person: { select: { code: true, fullName: true } } },
     });
     // Deaktiv edilən və ya rolu dəyişən istifadəçinin açıq sessiyaları bağlanır
+    // (maaş icazəsi və şəxs bağlantısı hər sorğuda DB-dən oxunur — dərhal qüvvəyə minir)
     if (!isActive || role !== before.role) await tx.session.deleteMany({ where: { userId: id } });
     return u;
   });
+  const personLabel = (p: { code: string; fullName: string } | null) => (p ? `${p.code} — ${p.fullName}` : null);
   const changes = diff(
-    { fullName: before.fullName, role: before.role, department: before.department?.name ?? null, isActive: before.isActive, canDeleteDocuments: before.canDeleteDocuments },
-    { fullName: after.fullName, role: after.role, department: after.department?.name ?? null, isActive: after.isActive, canDeleteDocuments: after.canDeleteDocuments },
+    {
+      fullName: before.fullName,
+      role: before.role,
+      department: before.department?.name ?? null,
+      isActive: before.isActive,
+      canDeleteDocuments: before.canDeleteDocuments,
+      person: personLabel(before.person),
+      canViewRestrictedSalaries: before.canViewRestrictedSalaries,
+    },
+    {
+      fullName: after.fullName,
+      role: after.role,
+      department: after.department?.name ?? null,
+      isActive: after.isActive,
+      canDeleteDocuments: after.canDeleteDocuments,
+      person: personLabel(after.person),
+      canViewRestrictedSalaries: after.canViewRestrictedSalaries,
+    },
   );
   if (Object.keys(changes).length) {
     await audit({ user: actor, action: "UPDATE", entity: "User", entityId: id, summary: `İstifadəçi dəyişdirildi: @${before.username}`, changes: changes as Prisma.InputJsonValue });

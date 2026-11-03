@@ -49,6 +49,8 @@ export interface MovementDiff {
   toSalary: number | null;
   fromUnitShare: number | null;
   toUnitShare: number | null;
+  /** Oklad dəyişib, amma məbləğ məxfidir (göstərilmir) */
+  salaryMasked?: boolean;
 }
 
 /** Nə dəyişib — növ qaydaları üçün */
@@ -65,7 +67,7 @@ const share = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 
 export const changesOf = (m: MovementDiff): MovementChanges => ({
   department: m.toDepartment !== null,
   position: m.toPosition !== null,
-  salary: m.toSalary !== null,
+  salary: m.toSalary !== null || !!m.salaryMasked,
   unitShare: m.toUnitShare !== null,
 });
 
@@ -117,6 +119,7 @@ export function describeMovement(m: MovementDiff, kind?: MovementKindCode | null
   if (m.toDepartment !== null) parts.push(`${m.fromDepartment ?? "—"} → ${m.toDepartment}`);
   if (m.toPosition !== null) parts.push(`${m.fromPosition ?? "—"} → ${m.toPosition}`);
   if (m.toSalary !== null) parts.push(`oklad ${m.fromSalary === null ? "—" : money(m.fromSalary)} → ${money(m.toSalary)}`);
+  else if (m.salaryMasked) parts.push("oklad: məxfi");
   if (m.toUnitShare !== null) parts.push(`ştat ${m.fromUnitShare === null ? "—" : share(m.fromUnitShare)} → ${share(m.toUnitShare)}`);
   return { kind: kind ? MOVEMENT_KIND_LABELS[kind] : legacy, details: parts.join("; ") };
 }

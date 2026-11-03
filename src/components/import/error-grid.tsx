@@ -185,6 +185,8 @@ export function ErrorGrid({ batchId, sheetKey, disabled, onSubmitted }: Props) {
   const startEdit = (r: number, c: number, initial?: string) => {
     if (disabled || c < 1) return;
     const field = fieldCols[c - 1]!.key;
+    // Məxfi maaş xanası redaktə olunmur (dəyər serverdən gəlməyib; saxlayanda server mövcudunu saxlayır)
+    if (rows[r]?.masked?.includes(field)) return;
     setEditing({ r, c, value: initial ?? rows[r]?.data[field] ?? "" });
   };
 
@@ -347,7 +349,13 @@ export function ErrorGrid({ batchId, sheetKey, disabled, onSubmitted }: Props) {
                               className="absolute inset-0 w-full bg-card px-2 text-foreground outline-2 -outline-offset-2 outline-primary"
                             />
                           ) : (
-                            r.data[field] || <span className="text-muted-foreground/50">—</span>
+                            r.masked?.includes(field) ? (
+                              <span className="text-muted-foreground" data-salary-hidden title="Maaş məxfidir">
+                                Məxfi
+                              </span>
+                            ) : (
+                              r.data[field] || <span className="text-muted-foreground/50">—</span>
+                            )
                           )}
                         </td>
                       );

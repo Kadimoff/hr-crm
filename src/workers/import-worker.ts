@@ -19,10 +19,10 @@ const worker = new Worker<ImportJobData>(
           await runValidation(prisma, batchId);
           break;
         case "commit":
-          await runCommit(prisma, batchId, false);
+          await runCommit(prisma, batchId, false, job.data.actorId);
           break;
         case "revalidate-commit":
-          await runCommit(prisma, batchId, true);
+          await runCommit(prisma, batchId, true, job.data.actorId);
           break;
       }
     } catch (e) {

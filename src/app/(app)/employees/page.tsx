@@ -4,6 +4,7 @@ import { EmployeeGrid } from "@/components/employee/employee-grid";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { can } from "@/lib/auth/roles";
+import { hiddenSalaryPersonIds } from "@/lib/auth/salary-access";
 import { departmentScope } from "@/lib/auth/scope";
 import { requireUser } from "@/lib/auth/session";
 import { getEmployeeRows } from "@/lib/queries";
@@ -17,7 +18,7 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
   // Arxivi yalnız redaktə hüququ olanlar görür
   const params = await searchParams;
   const archived = canEdit && params.archived === "1";
-  const rows = await getEmployeeRows(await departmentScope(user), { archived });
+  const rows = await getEmployeeRows(await departmentScope(user), { archived, hidden: await hiddenSalaryPersonIds(user) });
   const scopeNote = user.role === "DEPT_HEAD" ? ` · ${user.departmentName ?? "bölmə təyin edilməyib"} və alt bölmələri` : "";
 
   return (

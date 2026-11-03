@@ -4,7 +4,8 @@ import { Prisma, type EmploymentStatus } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { assertUser } from "@/lib/auth/session";
+import { salaryAccessFor } from "@/lib/auth/salary-access";
+import { assertUser, type CurrentUser } from "@/lib/auth/session";
 import { audit, diff, snapshot } from "@/lib/audit";
 import { DELETE_CONFIRM_WORD, matchesConfirmWord } from "@/lib/confirm";
 import { prisma } from "@/lib/db";
@@ -13,6 +14,7 @@ import { ORDER_LEAVE_TYPES } from "@/lib/leave-rules";
 import { applyLeave, cancelLeave } from "@/lib/leaves";
 import { MOVEMENT_KINDS } from "@/lib/movement-rules";
 import { applyMovement, MovementError } from "@/lib/movements";
+import { lockedSalaryInput } from "@/lib/salary-privacy";
 import { finCode, optEmail } from "@/lib/validation/primitives";
 
 export interface PersonFormState {
@@ -159,6 +161,29 @@ function employmentData(v: FormValues) {
   };
 }
 
+const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+
+/**
+ * Maaş məxfiliyi — formadan gələn okladı yoxlayır (zod-dan ƏVVƏL, raw dəyişdirilir):
+ * istifadəçi bu şəxsin okladını dəyişə bilmirsə, sahə formada göndərilmir (disabled) — boş gəlməsi mövcud okladı
+ * SİLMİR, mövcud dəyər server tərəfdə qoyulur; dəyər göndərilibsə (əl ilə POST) — rədd (bax lockedSalaryInput).
+ * Qaytarır: xəta mətni və ya null.
+ */
+async function applySalaryLock(user: CurrentUser, raw: Record<string, unknown>, personId: string, employmentId: string): Promise<string | null> {
+  const access = await salaryAccessFor(user, personId);
+  if (access.editable) return null;
+  const emp = employmentId ? await prisma.employment.findFirst({ where: { id: employmentId, personId }, select: { baseSalary: true } }) : null;
+  if (!emp) {
+    // Kilidli şəxsə yeni müqavilə (oklad ilə) — yalnız imtiyazlı hesab
+    if (str(raw.baseSalary) || str(raw.departmentId) || str(raw.positionId)) return "Maaşı məxfi olan əməkdaşa yeni müqaviləni yalnız root və ya səlahiyyətli hesab əlavə edə bilər";
+    return null;
+  }
+  const r = lockedSalaryInput(raw.baseSalary, Number(emp.baseSalary));
+  if (!r.ok) return r.error;
+  raw.baseSalary = String(r.value);
+  return null;
+}
+
 /** Növbəti əməkdaş kodu: mövcud "E<rəqəm>" kodlarının ən böyüyü + 1 */
 async function nextPersonCode(tx: Prisma.TransactionClient): Promise<string> {
   const rows = await tx.$queryRaw<{ max: number | null }[]>`
@@ -172,7 +197,12 @@ async function nextPersonCode(tx: Prisma.TransactionClient): Promise<string> {
 
 export async function savePersonAction(_prev: PersonFormState, form: FormData): Promise<PersonFormState> {
   const user = await assertUser("employees.edit");
-  const parsed = formSchema.safeParse(Object.fromEntries(form));
+  const raw: Record<string, unknown> = Object.fromEntries(form);
+  if (str(raw.id)) {
+    const lockError = await applySalaryLock(user, raw, str(raw.id), str(raw.employmentId));
+    if (lockError) return { error: lockError, fieldErrors: { baseSalary: lockError } };
+  }
+  const parsed = formSchema.safeParse(raw);
   if (!parsed.success) {
     const fieldErrors: Record<string, string> = {};
     for (const i of parsed.error.issues) fieldErrors[String(i.path[0])] ??= i.message;
@@ -366,7 +396,12 @@ const quickSchema = z.object({
 
 export async function quickUpdatePersonAction(_prev: QuickEditState, form: FormData): Promise<QuickEditState> {
   const user = await assertUser("employees.edit");
-  const parsed = quickSchema.safeParse(Object.fromEntries(form));
+  const raw: Record<string, unknown> = Object.fromEntries(form);
+  if (str(raw.personId)) {
+    const lockError = await applySalaryLock(user, raw, str(raw.personId), str(raw.employmentId));
+    if (lockError) return { error: lockError, fieldErrors: { baseSalary: lockError } };
+  }
+  const parsed = quickSchema.safeParse(raw);
   if (!parsed.success) {
     const fieldErrors: Record<string, string> = {};
     for (const i of parsed.error.issues) fieldErrors[String(i.path[0])] ??= i.message;
@@ -470,7 +505,12 @@ const movementSchema = z.object({
 
 export async function recordMovementAction(_prev: MovementFormState, form: FormData): Promise<MovementFormState> {
   const user = await assertUser("employees.edit");
-  const parsed = movementSchema.safeParse(Object.fromEntries(form));
+  const raw: Record<string, unknown> = Object.fromEntries(form);
+  if (str(raw.personId)) {
+    const lockError = await applySalaryLock(user, raw, str(raw.personId), str(raw.employmentId));
+    if (lockError) return { error: lockError, fieldErrors: { baseSalary: lockError } };
+  }
+  const parsed = movementSchema.safeParse(raw);
   if (!parsed.success) {
     const fieldErrors: Record<string, string> = {};
     for (const i of parsed.error.issues) fieldErrors[String(i.path[0])] ??= i.message;

@@ -24,6 +24,9 @@ export interface UserRow {
   departmentName: string | null;
   isActive: boolean;
   canDeleteDocuments: boolean;
+  /** Bağlı əməkdaş: «Kod — Ad» */
+  person: string | null;
+  canViewRestrictedSalaries: boolean;
   mustChangePassword: boolean;
   lastLoginAt: string | null;
   createdAt: string;
@@ -140,8 +143,9 @@ function CreateUserDialog({ departments }: { departments: Dept[] }) {
   );
 }
 
-function EditUserDialog({ user, departments, isMe }: { user: UserRow; departments: Dept[]; isMe: boolean }) {
+function EditUserDialog({ user, departments, isMe, persons }: { user: UserRow; departments: Dept[]; isMe: boolean; persons: string[] }) {
   const f = useDialogForm(updateUserAction, "Dəyişikliklər saxlanıldı");
+  const listId = `persons-${user.id}`;
   return (
     <Dialog open={f.open} onOpenChange={f.setOpen}>
       <DialogTrigger asChild>
@@ -164,6 +168,28 @@ function EditUserDialog({ user, departments, isMe }: { user: UserRow; department
             <input type="checkbox" name="isActive" defaultChecked={user.isActive} disabled={isMe} className="size-4 accent-[var(--primary)]" />
             Hesab aktivdir
             {isMe && <input type="hidden" name="isActive" value="on" />}
+          </label>
+          <FormField
+            label="Əməkdaş (hesabın sahibi)"
+            htmlFor={`personCode-${user.id}`}
+            error={f.fe.personCode}
+            hint="Ad və ya kodla axtarın. Bağlı əməkdaşın maaşı məxfi olur: sahibi öz maaşını görür (dəyişə bilmir), digər kadr əməkdaşları görmür."
+          >
+            <Input id={`personCode-${user.id}`} name="personCode" list={listId} defaultValue={user.person ?? ""} placeholder="Bağlı deyil" autoComplete="off" data-person-link />
+            <datalist id={listId}>
+              {persons.map((p) => (
+                <option key={p} value={p} />
+              ))}
+            </datalist>
+          </FormField>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" name="canViewRestrictedSalaries" defaultChecked={user.canViewRestrictedSalaries} className="mt-0.5 size-4 accent-[var(--primary)]" data-salary-privilege />
+            <span>
+              Məxfi maaşları görə bilər
+              <span className="block text-xs text-muted-foreground">
+                Yalnız kadr əməkdaşı üçün (məs. kadr şöbəsinin müdiri): məxfi bölmələrin və bağlı hesabların maaşlarını görür və dəyişir. Root həmişə görür, şöbə rəhbəri heç vaxt.
+              </span>
+            </span>
           </label>
           {user.role !== "ROOT" && (
             <label className="flex items-start gap-2 text-sm">
@@ -217,7 +243,7 @@ function ResetPasswordDialog({ user }: { user: UserRow }) {
   );
 }
 
-export function UsersAdmin({ users, departments, meId }: { users: UserRow[]; departments: Dept[]; meId: string }) {
+export function UsersAdmin({ users, departments, meId, persons }: { users: UserRow[]; departments: Dept[]; meId: string; persons: string[] }) {
   return (
     <Card className="overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">
@@ -263,7 +289,13 @@ export function UsersAdmin({ users, departments, meId }: { users: UserRow[]; dep
                       </Badge>
                     )}
                     {u.role !== "ROOT" && u.canDeleteDocuments && <Badge variant="outline">Sənəd silə bilər</Badge>}
+                    {u.role === "HR" && u.canViewRestrictedSalaries && <Badge variant="warning">Məxfi maaşları görür</Badge>}
                   </div>
+                  {u.person && (
+                    <div className="mt-1 text-xs text-muted-foreground" data-user-person>
+                      Əməkdaş: {u.person}
+                    </div>
+                  )}
                 </td>
                 <td className="px-3 py-2.5">{u.departmentName ?? <span className="text-muted-foreground/70">—</span>}</td>
                 <td className="px-3 py-2.5 whitespace-nowrap tabular-nums">{u.lastLoginAt ? formatDateTime(u.lastLoginAt) : <span className="text-muted-foreground/70">—</span>}</td>
@@ -274,7 +306,7 @@ export function UsersAdmin({ users, departments, meId }: { users: UserRow[]; dep
                 <td className="px-3 py-2.5">
                   <div className="flex justify-end gap-0.5">
                     <ResetPasswordDialog user={u} />
-                    <EditUserDialog user={u} departments={departments} isMe={u.id === meId} />
+                    <EditUserDialog user={u} departments={departments} isMe={u.id === meId} persons={persons} />
                   </div>
                 </td>
               </tr>

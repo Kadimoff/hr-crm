@@ -5,6 +5,8 @@ import type { CurrentUser } from "@/lib/auth/session";
 import { formatAzDate } from "@/lib/validation/primitives";
 import { logFinanceChanges, moneyValue, pctValue } from "./finance-log";
 import { describeMovement, inferMovementKind, MOVEMENT_KIND_LABELS, movementKindError, type MovementInput } from "./movement-rules";
+import { SALARY_LOCKED_MESSAGE, SALARY_SELF_MESSAGE, SALARY_TRANSFER_MESSAGE, type SalaryViewer } from "./salary-privacy";
+import { restrictedDepartmentIds, salaryAccess } from "./salary-restriction";
 
 const DAY = 86_400_000;
 
@@ -31,10 +33,14 @@ export class MovementError extends Error {
  *  4. maliyyə tarixçəsinə (FinancialChange) köhnə → yeni dəyərlər, əmr və mənbə (hansı formadan) yazılır;
  *  5. şəxsin updatedAt-ı yenilənir (açıq redaktə formaları köhnəlir), audit yazılır.
  * Növ (köçürmə / vəzifə artımı / maaş / ştat dəyişikliyi) verilməyibsə dəyişikliyə görə təyin olunur.
+ * Maaş məxfiliyi (bütün yollar — dosye forması, tam forma, struktur xəritəsi — buradan keçir):
+ *  - imtiyazsız istifadəçi məxfi şəxsin okladını dəyişə bilməz;
+ *  - məxfi şəxsi məxfi olmayan bölməyə köçürə bilməz;
+ *  - öz müqaviləsində (hesab bağlı şəxs) heç bir dəyişiklik edə bilməz.
  */
 export async function applyMovement(
   tx: Prisma.TransactionClient,
-  user: Pick<CurrentUser, "id" | "username">,
+  user: Pick<CurrentUser, "id" | "username"> & SalaryViewer,
   input: MovementInput,
   source: FinanceSource = "MOVEMENT",
 ): Promise<{ movementId: string; summary: string }> {
@@ -63,6 +69,12 @@ export async function applyMovement(
   const salaryChanged = Number(emp.baseSalary) !== input.baseSalary;
   const shareChanged = Number(emp.unitShare) !== input.unitShare;
   if (!deptChanged && !posChanged && !salaryChanged && !shareChanged) throw new MovementError("Heç bir dəyişiklik yoxdur — yeni bölmə, vəzifə, oklad və ya ştat payını daxil edin");
+  const access = await salaryAccess(tx, user, person.id);
+  if (!access.privileged) {
+    if (access.self) throw new MovementError(SALARY_SELF_MESSAGE);
+    if (salaryChanged && !access.editable) throw new MovementError(SALARY_LOCKED_MESSAGE, "baseSalary");
+    if (deptChanged && access.restricted && !(await restrictedDepartmentIds(tx)).has(input.departmentId)) throw new MovementError(SALARY_TRANSFER_MESSAGE, "departmentId");
+  }
   const changed = { department: deptChanged, position: posChanged, salary: salaryChanged, unitShare: shareChanged };
   const kind = input.kind ?? inferMovementKind(changed);
   const kindError = movementKindError(kind, changed);

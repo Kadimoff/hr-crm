@@ -1,3 +1,4 @@
+import { hiddenSalaryPersonIds } from "@/lib/auth/salary-access";
 import { departmentScope } from "@/lib/auth/scope";
 import { apiUser } from "@/lib/auth/session";
 import { getDashboardDataset } from "@/lib/dashboard/data";
@@ -15,7 +16,7 @@ export async function GET(request: Request) {
   const user = await apiUser();
   if (user instanceof Response) return user;
   const filters = parseFilters(new URL(request.url).searchParams);
-  const data = await getDashboardDataset(await departmentScope(user));
+  const data = await getDashboardDataset(await departmentScope(user), await hiddenSalaryPersonIds(user));
   const rows = applyFilters(data.rows, filters);
   return Response.json({ filters, kpi: computeKpis(rows, applyStaffingFilters(data.staffing, filters)), rows });
 }

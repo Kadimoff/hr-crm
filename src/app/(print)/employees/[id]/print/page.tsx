@@ -2,12 +2,14 @@ import { notFound } from "next/navigation";
 import { OriginalQr } from "@/components/print/original-qr";
 import { KV, PrintBar, PrintTable, Sheet, SheetSection } from "@/components/print/print-bar";
 import { formatYmd } from "@/lib/calc/seniority";
+import { salaryAccessFor } from "@/lib/auth/salary-access";
 import { canAccessPerson } from "@/lib/auth/scope";
 import { requireUser } from "@/lib/auth/session";
 import { audit } from "@/lib/audit";
 import { APP_NAME, ORG_NAME, ORG_UNIT } from "@/lib/org";
 import { absoluteUrl } from "@/lib/qr";
 import { getDossier, STAFF_CATEGORY_LABELS } from "@/lib/queries";
+import { SALARY_HIDDEN_LABEL } from "@/lib/salary-privacy";
 import { formatAzn, formatDateTime } from "@/lib/utils";
 import { formatAzDate } from "@/lib/validation/primitives";
 
@@ -22,7 +24,8 @@ const PROFICIENCY = { EXCELLENT: "əla", GOOD: "yaxşı", SATISFACTORY: "kafi" }
 export default async function PrintPersonPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser("employees.view");
   const { id } = await params;
-  const data = await getDossier(id);
+  const salary = await salaryAccessFor(user, id);
+  const data = await getDossier(id, { hideSalary: !salary.visible });
   if (!data || data.person.deletedAt || !(await canAccessPerson(user, id))) notFound();
   const { person: p, main, seniority, leave } = data;
 
@@ -98,7 +101,7 @@ export default async function PrintPersonPage({ params }: { params: Promise<{ id
               STAFF_CATEGORY_LABELS[e.position.staffCategory],
               d(e.hireDate),
               Number(e.unitShare).toLocaleString("en-US"),
-              formatAzn(Number(e.baseSalary)),
+              e.baseSalary === null ? SALARY_HIDDEN_LABEL : formatAzn(Number(e.baseSalary)),
               e.status === "TERMINATED" ? `Azad olunub ${d(e.terminationDate)}` : STATUS[e.status],
             ])}
           />

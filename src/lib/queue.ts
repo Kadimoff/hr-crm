@@ -3,10 +3,11 @@ import { createRedis } from "./redis";
 
 export const IMPORT_QUEUE = "hr-import";
 
+/** actorId — commit-i başladan istifadəçi: maaş məxfiliyi onun hüquqları ilə yoxlanılır (yoxdursa — batch-ı yaradan) */
 export type ImportJobData =
-  | { kind: "validate"; batchId: string }
-  | { kind: "commit"; batchId: string }
-  | { kind: "revalidate-commit"; batchId: string };
+  | { kind: "validate"; batchId: string; actorId?: string }
+  | { kind: "commit"; batchId: string; actorId?: string }
+  | { kind: "revalidate-commit"; batchId: string; actorId?: string };
 
 const globalForQueue = globalThis as unknown as { importQueue?: Queue<ImportJobData> };
 

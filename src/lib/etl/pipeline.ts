@@ -1,7 +1,7 @@
 import type { ImportBatchStatus, Prisma, PrismaClient } from "@prisma/client";
 import { getSheet } from "../validation/templates";
 import type { TemplateKey } from "../validation/types";
-import { annotateWaitingRows, commitBatch } from "./committer";
+import { annotateSalarySkipped, annotateWaitingRows, commitBatch } from "./committer";
 import { streamWorkbook } from "./parser";
 import { emit } from "./progress";
 import { refreshFileCounters, validateBatch } from "./validator";
@@ -52,7 +52,7 @@ export async function runValidation(db: PrismaClient, batchId: string): Promise<
   await setStatus(db, batchId, invalid > 0 ? "NEEDS_REVIEW" : "READY");
 }
 
-export async function runCommit(db: PrismaClient, batchId: string, revalidate: boolean): Promise<void> {
+export async function runCommit(db: PrismaClient, batchId: string, revalidate: boolean, actorId?: string): Promise<void> {
   if (revalidate) {
     await setStatus(db, batchId, "VALIDATING");
     await emit(batchId, { type: "phase", phase: "validate", message: "Düzəlişlər yenidən yoxlanılır" });
@@ -60,11 +60,13 @@ export async function runCommit(db: PrismaClient, batchId: string, revalidate: b
   }
   await setStatus(db, batchId, "COMMITTING");
   await emit(batchId, { type: "phase", phase: "commit", message: "Topoloji ardıcıllıqla bazaya yazılır" });
-  await commitBatch(db, batchId);
+  const { salarySkipped, salaryBlocked } = await commitBatch(db, batchId, actorId);
   // Commit edilmiş sətirlər yeni kontekstdir — qalan sətirlərin xətalarını yeniləyirik
   await validateBatch(db, batchId);
   // Şəxsin başqa sətri xətalı olduğu üçün gözləyən etibarlı sətirlərə izah (yoxlamadan sonra — onu silməsin)
   await annotateWaitingRows(db, batchId);
+  // Maaş sahəsi atlanmış (məxfi) sətirlərə izah — yoxlamadan SONRA (validateBatch onu silməsin)
+  await annotateSalarySkipped(db, salarySkipped, salaryBlocked);
   await refreshFileCounters(db, batchId);
   const remaining = await db.stagingRow.count({ where: { batchId, status: { in: ["INVALID", "VALID"] } } });
   await setStatus(db, batchId, remaining > 0 ? "NEEDS_REVIEW" : "COMPLETED");

@@ -15,8 +15,10 @@ import {
   type LeaveSheetKey,
   type SheetRow,
 } from "../validation/templates";
-import { PERSON_GROUP_BLOCKED, type FieldIssue, type RawRow, type SheetKey } from "../validation/types";
+import { PERSON_GROUP_BLOCKED, SALARY_SKIPPED, type FieldIssue, type RawRow, type SheetKey } from "../validation/types";
 import { logFinanceChanges, moneyValue, pctValue, todayUtc } from "../finance-log";
+import { isSalaryPrivileged, type SalaryViewer } from "../salary-privacy";
+import { lockedSalaryIds, restrictedDepartmentIds } from "../salary-restriction";
 import { emit } from "./progress";
 import { STAGE_ORDER } from "./validator";
 
@@ -54,6 +56,32 @@ async function loadLookups(db: PrismaClient, userId: string | null): Promise<Loo
 
 class CommitError extends Error {}
 
+const SALARY_BLOCKED_MESSAGE = "Maaşı məxfi olan əməkdaşa yeni müqaviləni yalnız root və ya səlahiyyətli hesab idxal edə bilər";
+
+/**
+ * Maaş məxfiliyi: idxalı yazan (commit edən) istifadəçinin hüquqları. İmtiyazsızdırsa — məxfi şəxsin okladı və
+ * məxfi bölmənin mövcud ştat maaşları yazılmır (sətir yazılır, maaş sahəsi atlanır, izah əlavə olunur).
+ */
+interface SalaryGuard {
+  privileged: boolean;
+  /** Okladını dəyişə bilmədiyi şəxslər (məxfilər + özü) */
+  locked: Set<string>;
+  /** Məxfi bölmələr (alt bölmələr daxil) */
+  depts: Set<string>;
+  /** Maaş sahəsi atlanmış sətirlər */
+  skipped: string[];
+  /** Maaş məxfiliyinə görə ümumiyyətlə yazılmamış sətirlər (kilidli şəxsə yeni müqavilə) */
+  blocked: string[];
+}
+
+async function loadSalaryGuard(db: PrismaClient, actorId: string | null): Promise<SalaryGuard> {
+  const actor = actorId ? await db.user.findUnique({ where: { id: actorId }, select: { role: true, personId: true, canViewRestrictedSalaries: true } }) : null;
+  // Naməlum istifadəçi — ən məhdud hüquqlar
+  const viewer: SalaryViewer = actor ?? { role: "DEPT_HEAD", personId: null, canViewRestrictedSalaries: false };
+  if (isSalaryPrivileged(viewer)) return { privileged: true, locked: new Set(), depts: new Set(), skipped: [], blocked: [] };
+  return { privileged: false, locked: await lockedSalaryIds(db, viewer), depts: await restrictedDepartmentIds(db), skipped: [], blocked: [] };
+}
+
 function need(map: Map<string, string>, code: string, label: string): string {
   const id = map.get(code);
   if (!id) throw new CommitError(`${label} "${code}" bazada tapılmadı`);
@@ -73,12 +101,18 @@ const isAbsenceSheet = (k: SheetKey): k is AbsenceSheetKey => k in ABSENCE_SHEET
 //  Tək sətirlik (entity) yazılar
 // ----------------------------------------------------------------------------
 
-async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups): Promise<void> {
+async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups, guard: SalaryGuard): Promise<void> {
   const sheet = row.sheetKey;
 
   if (isDepartmentSheet(sheet)) {
     const r = parse(sheet, row.data);
     const parentId = r.parentCode ? need(lk.departments, r.parentCode, "Tabe olduğu bölmə") : null;
+    // Məxfi bölməni (və ya onun alt bölməsini) başqa yerə daşımaq məxfiliyi götürərdi — yalnız imtiyazlı hesab
+    if (!guard.privileged) {
+      const current = await tx.department.findUnique({ where: { code: r.code }, select: { id: true, parentId: true } });
+      if (current && guard.depts.has(current.id) && current.parentId !== parentId && !(parentId && guard.depts.has(parentId)))
+        throw new CommitError("Maaşları məxfi olan bölmənin tabeliyini yalnız root və ya səlahiyyətli hesab dəyişə bilər");
+    }
     const data = { name: r.name, level: r.level, isFaculty: r.isFaculty, isChair: r.isChair, parentId, createdOn: r.createdOn, closedOn: r.closedOn ?? null };
     const d = await tx.department.upsert({ where: { code: r.code }, create: { code: r.code, ...data }, update: data, select: { id: true } });
     lk.departments.set(r.code, d.id);
@@ -135,11 +169,15 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups): Promise<void> {
       const departmentId = need(lk.departments, r.departmentCode, "Bölmə");
       const positionId = need(lk.positions, r.positionCode, "Vəzifə");
       const data = { unitCount: r.unitCount, minSalary: r.minSalary, maxSalary: r.maxSalary, salaryType: r.salaryType ?? null, schedule: r.schedule };
-      await tx.staffingUnit.upsert({
-        where: { periodDate_departmentId_positionId: { periodDate: r.periodDate, departmentId, positionId } },
-        create: { periodDate: r.periodDate, departmentId, positionId, ...data },
-        update: data,
-      });
+      const where = { periodDate_departmentId_positionId: { periodDate: r.periodDate, departmentId, positionId } };
+      // Məxfi bölmənin mövcud ştat maaşları imtiyazsız idxalla dəyişmir (bərabər olub-olmamasından asılı olmayaraq atlanır)
+      if (!guard.privileged && guard.depts.has(departmentId) && (await tx.staffingUnit.findUnique({ where, select: { id: true } }))) {
+        const { minSalary: _min, maxSalary: _max, ...rest } = data;
+        await tx.staffingUnit.update({ where, data: rest });
+        guard.skipped.push(row.id);
+        return;
+      }
+      await tx.staffingUnit.upsert({ where, create: { periodDate: r.periodDate, departmentId, positionId, ...data }, update: data });
       return;
     }
     case "persons": {
@@ -173,10 +211,16 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups): Promise<void> {
       const departmentId = need(lk.departments, r.departmentCode, "Bölmə");
       const where = { personId_positionId_departmentId_hireDate: { personId, positionId, departmentId, hireDate: r.hireDate } };
       const existing = await tx.employment.findUnique({ where, select: { id: true, baseSalary: true, unitShare: true, paymentForm: true } });
-      const data = { schedule: r.schedule, paymentForm: r.paymentForm, baseSalary: r.baseSalary, unitShare: r.unitShare ?? 1 };
+      // Maaş məxfiliyi: imtiyazsız istifadəçi məxfi şəxsin okladını idxalla dəyişə bilməz
+      const salaryLocked = guard.locked.has(personId);
+      const data = { schedule: r.schedule, paymentForm: r.paymentForm, unitShare: r.unitShare ?? 1, ...(salaryLocked ? {} : { baseSalary: r.baseSalary }) };
       if (!existing) {
+        if (salaryLocked) {
+          guard.blocked.push(row.id);
+          throw new CommitError(SALARY_BLOCKED_MESSAGE);
+        }
         await tx.employment.create({
-          data: { personId, positionId, departmentId, hireDate: r.hireDate, ...data, salaryHistory: { create: { baseSalary: r.baseSalary, validFrom: r.hireDate } } },
+          data: { personId, positionId, departmentId, hireDate: r.hireDate, ...data, baseSalary: r.baseSalary, salaryHistory: { create: { baseSalary: r.baseSalary, validFrom: r.hireDate } } },
         });
         return;
       }
@@ -184,11 +228,13 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups): Promise<void> {
       const today = todayUtc();
       // Maliyyə tarixçəsi: idxal ilə dəyişən oklad / ştat payı / ödəniş forması — idxal günündən qüvvədə
       await logFinanceChanges(tx, { personId, employmentId: existing.id, effectiveDate: today, source: "IMPORT", userId: lk.userId }, [
-        { field: "BASE_SALARY", oldValue: moneyValue(existing.baseSalary), newValue: moneyValue(r.baseSalary) },
+        ...(salaryLocked ? [] : [{ field: "BASE_SALARY" as const, oldValue: moneyValue(existing.baseSalary), newValue: moneyValue(r.baseSalary) }]),
         { field: "UNIT_SHARE", oldValue: moneyValue(existing.unitShare), newValue: moneyValue(data.unitShare) },
         { field: "PAYMENT_FORM", oldValue: existing.paymentForm, newValue: data.paymentForm },
       ]);
-      if (Number(existing.baseSalary) !== r.baseSalary) {
+      // Kilidli okladın atlandığı HƏR sətirdə izah (bərabər olub-olmamasından asılı olmayaraq — cavab maaşı açmasın)
+      if (salaryLocked) guard.skipped.push(row.id);
+      else if (Number(existing.baseSalary) !== r.baseSalary) {
         await tx.salaryRecord.updateMany({ where: { employmentId: existing.id, validTo: null }, data: { validTo: new Date(today.getTime() - 86_400_000) } });
         await tx.salaryRecord.create({ data: { employmentId: existing.id, baseSalary: r.baseSalary, validFrom: today } });
       }
@@ -453,10 +499,15 @@ const CHUNK = 100;
  * - Entity vərəqləri: 100 sətirlik tranzaksiyalar; tranzaksiya uğursuz olarsa sətir-sətir təkrar edilir və xətalı sətir ayrılır.
  * - Siyahı vərəqləri: şəxs üzrə atomik — şəxsin həmin vərəqdəki bütün sətirləri etibarlıdırsa, köhnə qeydlər əvəz olunur.
  */
-export async function commitBatch(db: PrismaClient, batchId: string): Promise<{ committed: number; failed: number }> {
+export async function commitBatch(
+  db: PrismaClient,
+  batchId: string,
+  actorId?: string,
+): Promise<{ committed: number; failed: number; salarySkipped: string[]; salaryBlocked: string[] }> {
   let committed = 0;
   let failed = 0;
   const { createdBy } = await db.importBatch.findUniqueOrThrow({ where: { id: batchId }, select: { createdBy: true } });
+  const guard = await loadSalaryGuard(db, actorId ?? createdBy);
 
   for (const stage of STAGE_ORDER) {
     const rows = (await db.stagingRow.findMany({
@@ -514,7 +565,7 @@ export async function commitBatch(db: PrismaClient, batchId: string): Promise<{ 
         const chunk = valid.slice(i, i + CHUNK);
         try {
           await db.$transaction(async (tx) => {
-            for (const r of chunk) await writeEntity(tx, r, lk);
+            for (const r of chunk) await writeEntity(tx, r, lk, guard);
           });
           await markCommitted(db, chunk.map((r) => r.id));
           committed += chunk.length;
@@ -523,7 +574,7 @@ export async function commitBatch(db: PrismaClient, batchId: string): Promise<{ 
           Object.assign(lk, await loadLookups(db, createdBy));
           for (const r of chunk) {
             try {
-              await db.$transaction((tx) => writeEntity(tx, r, lk));
+              await db.$transaction((tx) => writeEntity(tx, r, lk, guard));
               await markCommitted(db, [r.id]);
               committed++;
             } catch (e) {
@@ -537,5 +588,35 @@ export async function commitBatch(db: PrismaClient, batchId: string): Promise<{ 
       }
     }
   }
-  return { committed, failed };
+  return { committed, failed, salarySkipped: [...new Set(guard.skipped)], salaryBlocked: [...new Set(guard.blocked)] };
+}
+
+/**
+ * Maaş məxfiliyi izahları (commit-dən sonrakı yoxlamadan SONRA — validateBatch onları silməsin):
+ *  - skipped: sətir yazılıb, maaş sahəsi atlanıb (xəbərdarlıq);
+ *  - blocked: sətir yazılmayıb (xəta, status INVALID) — yoxlama onu yenidən VALID etmişdi, izahsız qalırdı.
+ */
+export async function annotateSalarySkipped(db: PrismaClient, ids: string[], blocked: string[] = []): Promise<void> {
+  if (blocked.length) {
+    const err: FieldIssue = { field: "baseSalary", tier: "reference", severity: "error", code: SALARY_SKIPPED, message: SALARY_BLOCKED_MESSAGE };
+    await db.$executeRaw`
+      UPDATE "StagingRow"
+      SET "status" = 'INVALID',
+          "errors" = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements("errors") e WHERE e->>'code' IS DISTINCT FROM ${SALARY_SKIPPED}), '[]'::jsonb) || jsonb_build_array(${JSON.stringify(err)}::jsonb),
+          "updatedAt" = now()
+      WHERE "id" = ANY(${blocked}::text[]) AND "status" <> 'COMMITTED'`;
+  }
+  if (!ids.length) return;
+  const issue: FieldIssue = {
+    field: "*",
+    tier: "reference",
+    severity: "warning",
+    code: SALARY_SKIPPED,
+    message: "Sətir yazıldı, amma maaş sahəsi atlandı: bu əməkdaşın / bölmənin maaşı məxfidir — onu yalnız root və ya səlahiyyətli hesab dəyişə bilər.",
+  };
+  await db.$executeRaw`
+    UPDATE "StagingRow"
+    SET "errors" = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements("errors") e WHERE e->>'code' IS DISTINCT FROM ${SALARY_SKIPPED}), '[]'::jsonb) || jsonb_build_array(${JSON.stringify(issue)}::jsonb),
+        "updatedAt" = now()
+    WHERE "id" = ANY(${ids}::text[]) AND "status" = 'COMMITTED'`;
 }

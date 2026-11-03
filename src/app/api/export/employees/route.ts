@@ -1,9 +1,11 @@
 import ExcelJS from "exceljs";
 import { z } from "zod";
+import { hiddenSalaryPersonIds } from "@/lib/auth/salary-access";
 import { departmentScope } from "@/lib/auth/scope";
 import { apiUser } from "@/lib/auth/session";
 import { audit } from "@/lib/audit";
 import { getEmployeeRows, type EmployeeRow } from "@/lib/queries";
+import { SALARY_HIDDEN_LABEL } from "@/lib/salary-privacy";
 
 export const runtime = "nodejs";
 
@@ -17,7 +19,8 @@ const COLUMNS: Record<string, { header: string; width: number; value: (r: Employ
   staffCategory: { header: "Heyət", width: 18, value: (r) => r.staffCategory },
   status: { header: "Status", width: 14, value: (r) => (r.status ? STATUS_LABEL[r.status] : null) },
   hireDate: { header: "İşə qəbul", width: 12, value: (r) => (r.hireDate ? new Date(r.hireDate) : null) },
-  baseSalary: { header: "Oklad (AZN)", width: 12, value: (r) => r.baseSalary },
+  // Məxfi maaş — rəqəm yox, «Məxfi» (getEmployeeRows onu ümumiyyətlə qaytarmır)
+  baseSalary: { header: "Oklad (AZN)", width: 12, value: (r) => (r.salaryHidden ? SALARY_HIDDEN_LABEL : r.baseSalary) },
   degree: { header: "Elmi dərəcə", width: 18, value: (r) => r.degree },
   title: { header: "Elmi ad", width: 12, value: (r) => r.title },
   gender: { header: "Cins", width: 8, value: (r) => (r.gender === "MALE" ? "Kişi" : "Qadın") },
@@ -37,7 +40,7 @@ export async function POST(request: Request) {
   if (user instanceof Response) return user;
   const { ids, cols } = bodySchema.parse(await request.json());
   // Şöbə rəhbəri yalnız öz bölməsinin əməkdaşlarını ixrac edə bilər
-  const all = await getEmployeeRows(await departmentScope(user));
+  const all = await getEmployeeRows(await departmentScope(user), { hidden: await hiddenSalaryPersonIds(user) });
   const byId = new Map(all.map((r) => [r.id, r]));
   const rows = ids.map((id) => byId.get(id)).filter((r): r is EmployeeRow => !!r);
   const selected = ["fullName", "code", ...cols.filter((c) => c !== "fullName")].filter((c) => c in COLUMNS);

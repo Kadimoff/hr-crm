@@ -8,8 +8,10 @@ import type { DashboardDataset, DashboardRow, DeptRef, StaffingRow } from "./fil
 /**
  * İdarə paneli üçün verilənlər: hər aktiv müqavilə bir sətir (arxivdəki şəxslər xaric).
  * scope — şöbə rəhbəri üçün bölmə id-ləri (null = bütün təşkilat).
+ * hidden — maaşı gizlədilən şəxslər: onların brutto/netto/xərci 0 göndərilir və BÜTÜN cəmlərdən (ümumi, kateqoriya,
+ * bölmə) çıxarılır — ümumi cəmdən bölgüləri çıxmaqla fərdi maaş hesablana bilməz.
  */
-export async function getDashboardDataset(scope: string[] | null): Promise<DashboardDataset> {
+export async function getDashboardDataset(scope: string[] | null, hidden: ReadonlySet<string> = new Set()): Promise<DashboardDataset> {
   const today = todayUtc();
   const [departments, employments, staffing, absences] = await Promise.all([
     prisma.department.findMany({ select: { id: true, name: true, level: true, parentId: true }, orderBy: [{ level: "asc" }, { name: "asc" }] }),
@@ -61,6 +63,7 @@ export async function getDashboardDataset(scope: string[] | null): Promise<Dashb
 
   const rows: DashboardRow[] = employments.map((e) => {
     const degrees = e.person.academicDegrees.map((d) => d.degree);
+    const salaryHidden = hidden.has(e.personId);
     const payroll = computePayroll({
       baseSalary: Number(e.baseSalary),
       degrees,
@@ -83,9 +86,10 @@ export async function getDashboardDataset(scope: string[] | null): Promise<Dashb
       hireDate: e.hireDate.toISOString(),
       hireYear: e.hireDate.getUTCFullYear(),
       unitShare: Number(e.unitShare),
-      gross: payroll.gross,
-      net: payroll.net,
-      employerCost: payroll.employerCost,
+      gross: salaryHidden ? 0 : payroll.gross,
+      net: salaryHidden ? 0 : payroll.net,
+      employerCost: salaryHidden ? 0 : payroll.employerCost,
+      salaryHidden,
       onLeave: e.status === "ON_LEAVE" || absent.has(e.personId),
     };
   });

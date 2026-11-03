@@ -11,6 +11,7 @@ import {
   LandmarkIcon,
   LayoutGridIcon,
   LoaderIcon,
+  LockIcon,
   MailIcon,
   MaximizeIcon,
   MinusIcon,
@@ -31,6 +32,7 @@ import { startTransition, useActionState, useCallback, useEffect, useLayoutEffec
 import { toast } from "sonner";
 import { quickUpdatePersonAction, type QuickEditState } from "@/actions/persons";
 import { MovementOrderFields } from "@/components/employee/movement-fields";
+import { SalaryInput } from "@/components/employee/salary-field";
 import { deleteDepartmentAction, saveDepartmentAction, type DeptFormState } from "@/actions/structure";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,6 +43,7 @@ import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { searchHaystack, searchKey } from "@/lib/list-state";
+import { SALARY_HIDDEN_HINT, SALARY_HIDDEN_LABEL } from "@/lib/salary-privacy";
 import type { OrgNode, OrgStaff, PersonFormOptions } from "@/lib/queries";
 import { useBackToClose } from "@/lib/use-back-close";
 import { cn, formatAzn, formatIsoDate, formatNumber, initials } from "@/lib/utils";
@@ -317,12 +320,15 @@ export function OrgChart({
   options,
   canEdit,
   canEditStructure,
+  canMarkSalary = false,
 }: {
   tree: OrgNode[];
   staff: OrgStaff[];
   options: PersonFormOptions;
   canEdit: boolean;
   canEditStructure: boolean;
+  /** Bölmə redaktəsində «Maaşlar məxfidir» işarəsi (root / səlahiyyətli hesab) */
+  canMarkSalary?: boolean;
 }) {
   const { byId, parentOf } = useMemo(() => indexTree(tree), [tree]);
   const staffByDept = useMemo(() => {
@@ -750,7 +756,7 @@ export function OrgChart({
             <a href="/import">İdxal mərkəzi</a>
           </Button>
         </div>
-        <DeptDialog state={deptDialog} tree={tree} onClose={() => setDeptDialog(null)} onCreated={() => undefined} />
+        <DeptDialog state={deptDialog} tree={tree} onClose={() => setDeptDialog(null)} onCreated={() => undefined} canMarkSalary={canMarkSalary} />
       </Card>
     );
   }
@@ -1009,6 +1015,7 @@ export function OrgChart({
           // Yeni bölmə görünsün deyə valideyn açılır
           if (parentId) setExpanded((prev) => new Set(prev).add(parentId));
         }}
+        canMarkSalary={canMarkSalary}
       />
     </Card>
   );
@@ -1211,6 +1218,11 @@ function DeptCard({
           <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
             <span className="font-mono">{d.code}</span>
             <span className="tabular-nums">{d.headcount} nəfər</span>
+            {d.salaryRestricted && (
+              <span title="Maaşlar məxfidir" data-dept-salary-lock>
+                <LockIcon className="size-3" />
+              </span>
+            )}
             {d.closed && <Badge variant="danger">ləğv</Badge>}
           </div>
         </div>
@@ -1324,7 +1336,19 @@ function suggestCode(parent: OrgNode | null, tree: OrgNode[]) {
   }
 }
 
-function DeptDialog({ state, tree, onClose, onCreated }: { state: DeptDialogState; tree: OrgNode[]; onClose: () => void; onCreated: (parentId: string | null) => void }) {
+function DeptDialog({
+  state,
+  tree,
+  onClose,
+  onCreated,
+  canMarkSalary = false,
+}: {
+  state: DeptDialogState;
+  tree: OrgNode[];
+  onClose: () => void;
+  onCreated: (parentId: string | null) => void;
+  canMarkSalary?: boolean;
+}) {
   const router = useRouter();
   const [form, formAction, pending] = useActionState<DeptFormState, FormData>(saveDepartmentAction, {});
   const [deleting, startDelete] = useTransition();
@@ -1395,6 +1419,18 @@ function DeptDialog({ state, tree, onClose, onCreated }: { state: DeptDialogStat
             </FormField>
           </div>
           <SelectField name="kind" label="Növü" value={defaultKind} options={KIND_OPTIONS} error={fe.kind} />
+          {canMarkSalary && (
+            <label className="flex items-start gap-2 text-sm" data-dept-salary-restricted>
+              <input type="hidden" name="salaryRestrictedField" value="1" />
+              <input type="checkbox" name="salaryRestricted" defaultChecked={edit?.salaryRestricted ?? false} className="mt-0.5 size-4 accent-[var(--primary)]" />
+              <span>
+                Maaşlar məxfidir
+                <span className="block text-xs text-muted-foreground">
+                  Bu bölmədə (alt bölmələr daxil) işləyən və işləmiş əməkdaşların maaşını yalnız root və «məxfi maaşları görə bilər» hesabları görür və dəyişir.
+                </span>
+              </span>
+            </label>
+          )}
           {form.error && !form.ok && <p className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">{form.error}</p>}
           <DialogFooter className="sm:justify-between">
             {edit ? (
@@ -1477,16 +1513,17 @@ function StaffPanel({ staff: s, dept, options, canEdit, onClose }: { staff: OrgS
   const [state, formAction, pending] = useActionState<QuickEditState, FormData>(quickUpdatePersonAction, {});
   const fe = state.ok ? {} : (state.fieldErrors ?? {});
   // Bölmə / vəzifə / oklad / ştat payı dəyişəndə — əmr sahələri (kadr hərəkəti)
-  const initialJob = { departmentId: s.departmentId, positionId: s.positionId, baseSalary: String(s.baseSalary), unitShare: String(s.unitShare) };
+  const salaryText = s.baseSalary === null ? "" : String(s.baseSalary);
+  const initialJob = { departmentId: s.departmentId, positionId: s.positionId, baseSalary: salaryText, unitShare: String(s.unitShare) };
   const [job, setJob] = useState(initialJob);
   const jobChanged =
     job.departmentId !== initialJob.departmentId ||
     job.positionId !== initialJob.positionId ||
-    Number(job.baseSalary) !== s.baseSalary ||
+    (!s.salaryLocked && Number(job.baseSalary) !== s.baseSalary) ||
     Number(job.unitShare) !== s.unitShare;
   useEffect(() => {
-    if (!editing) setJob({ departmentId: s.departmentId, positionId: s.positionId, baseSalary: String(s.baseSalary), unitShare: String(s.unitShare) });
-  }, [editing, s.departmentId, s.positionId, s.baseSalary, s.unitShare]);
+    if (!editing) setJob({ departmentId: s.departmentId, positionId: s.positionId, baseSalary: salaryText, unitShare: String(s.unitShare) });
+  }, [editing, s.departmentId, s.positionId, salaryText, s.unitShare]);
 
   useEffect(() => {
     if (state.ok) {
@@ -1539,7 +1576,15 @@ function StaffPanel({ staff: s, dept, options, canEdit, onClose }: { staff: OrgS
             <dt className="text-muted-foreground">İşə qəbul</dt>
             <dd className="tabular-nums">{formatIsoDate(s.hireDate)}</dd>
             <dt className="text-muted-foreground">Oklad</dt>
-            <dd className="tabular-nums">{formatAzn(s.baseSalary)}</dd>
+            <dd className="tabular-nums">
+              {s.baseSalary === null ? (
+                <Badge variant="outline" className="gap-1" title={SALARY_HIDDEN_HINT} data-salary-hidden>
+                  <LockIcon className="size-3" /> {SALARY_HIDDEN_LABEL}
+                </Badge>
+              ) : (
+                formatAzn(s.baseSalary)
+              )}
+            </dd>
             <dt className="text-muted-foreground">Ştat payı</dt>
             <dd className="tabular-nums">{formatNumber(s.unitShare, 2)}</dd>
             <dt className="text-muted-foreground">Mobil</dt>
@@ -1591,13 +1636,12 @@ function StaffPanel({ staff: s, dept, options, canEdit, onClose }: { staff: OrgS
             <SelectField name="positionId" label="Vəzifə" value={s.positionId} options={options.positions} error={fe.positionId} onChange={(v) => setJob((j) => ({ ...j, positionId: v }))} />
             <div className="grid grid-cols-2 gap-3">
               <FormField label="Oklad (₼)" htmlFor="baseSalary" error={fe.baseSalary} required>
-                <Input
+                <SalaryInput
                   id="baseSalary"
                   name="baseSalary"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  defaultValue={s.baseSalary}
+                  locked={s.salaryLocked}
+                  hidden={s.baseSalary === null}
+                  value={s.baseSalary}
                   onChange={(e) => {
                     const value = e.currentTarget.value;
                     setJob((j) => ({ ...j, baseSalary: value }));

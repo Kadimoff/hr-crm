@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { hiddenSalaryPersonIds } from "@/lib/auth/salary-access";
 import { departmentScope } from "@/lib/auth/scope";
 import { apiUser } from "@/lib/auth/session";
 import { audit } from "@/lib/audit";
@@ -13,7 +14,7 @@ export async function GET(request: Request) {
   const user = await apiUser("employees.view");
   if (user instanceof Response) return user;
   const filters = parseFilters(new URL(request.url).searchParams);
-  const data = await getDashboardDataset(await departmentScope(user));
+  const data = await getDashboardDataset(await departmentScope(user), await hiddenSalaryPersonIds(user));
   const rows = applyFilters(data.rows, filters).sort((a, b) => a.fullName.localeCompare(b.fullName, "az"));
   const deptName = (id: string) => data.departments.find((d) => d.id === id)?.name ?? id;
   const summary = FILTER_KEYS.filter((k) => filters[k])

@@ -5,6 +5,7 @@ import { prisma } from "./db";
 import { ORDER_LEAVE_LABELS, leaveDays, type OrderLeaveType } from "./leave-rules";
 import { describeMovement, isReportEventKind, movementKindOf, REPORT_EVENT_LABELS, type ReportEventKind } from "./movement-rules";
 import { STAFF_CATEGORY_LABELS } from "./queries";
+import { maskMovementSalary, SALARY_EXCLUDED_NOTE, SALARY_HIDDEN_LABEL } from "./salary-privacy";
 import { formatAzDate } from "./validation/primitives";
 
 export type Cell = string | number | null;
@@ -32,12 +33,18 @@ export interface ReportParams {
   kind?: ReportEventKind;
 }
 
+/** Hesabatı kim üçün qururuq: bölmə məhdudiyyəti (şöbə rəhbəri) və maaşı gizlədilən şəxslər (maaş məxfiliyi) */
+export interface ReportContext {
+  scope: string[] | null;
+  hidden: ReadonlySet<string>;
+}
+
 export interface ReportDef {
   key: string;
   title: string;
   description: string;
   params: ("period" | "status" | "kind")[];
-  run: (scope: string[] | null, params: ReportParams) => Promise<ReportResult>;
+  run: (ctx: ReportContext, params: ReportParams) => Promise<ReportResult>;
 }
 
 const CATEGORIES = Object.keys(STAFF_CATEGORY_LABELS) as StaffCategory[];
@@ -102,7 +109,7 @@ export const REPORTS: ReportDef[] = [
     title: "Struktur bölmələri üzrə say",
     description: "Hər bölmədə əməkdaş sayı — cins və heyət kateqoriyası üzrə",
     params: [],
-    async run(scope) {
+    async run({ scope }) {
       const groups = groupByDepartment(await employments(scope));
       const rows = groups.map((g) => {
         const people = new Set(g.items.map((e) => e.personId));
@@ -138,10 +145,13 @@ export const REPORTS: ReportDef[] = [
     title: "Əməkhaqqı fondu",
     description: "Bölmələr üzrə aylıq oklad cəmi, brutto, netto və işəgötürən xərci (təxmini)",
     params: [],
-    async run(scope) {
+    async run({ scope, hidden }) {
       const list = await employments(scope);
+      // Güzəşt/əlavələrin bölgüsü bütün müqavilələrdən; məxfi maaşlar isə HEÇ BİR cəmə (bölmə və ümumi) daxil edilmir —
+      // ümumi cəmdən bölmələri çıxmaqla fərdi maaş hesablana bilməsin
       const primary = primaryEmploymentIds(list);
-      const groups = groupByDepartment(list);
+      const excluded = list.filter((e) => hidden.has(e.personId)).length;
+      const groups = groupByDepartment(list.filter((e) => !hidden.has(e.personId)));
       const rows = groups.map((g) => {
         const p = g.items.map((e) => payrollOf(e, primary));
         return {
@@ -166,7 +176,9 @@ export const REPORTS: ReportDef[] = [
         ],
         rows,
         totals,
-        note: "Brutto/netto əlavələr, vergi və sosial ayırmalar sistemdəki əməkhaqqı qaydaları ilə hesablanır — təxmini göstəricidir. Vergi güzəştləri və elmi dərəcə/ad əlavələri şəxsə bir dəfə (əsas iş yerində, ştat payına mütənasib) tətbiq olunur; əvəzçilikdə yalnız oklad.",
+        note:
+          "Brutto/netto əlavələr, vergi və sosial ayırmalar sistemdəki əməkhaqqı qaydaları ilə hesablanır — təxmini göstəricidir. Vergi güzəştləri və elmi dərəcə/ad əlavələri şəxsə bir dəfə (əsas iş yerində, ştat payına mütənasib) tətbiq olunur; əvəzçilikdə yalnız oklad." +
+          (excluded ? ` ${SALARY_EXCLUDED_NOTE}: ${excluded} müqavilə hesabata (say daxil) əlavə edilməyib.` : ""),
       };
     },
   },
@@ -175,7 +187,7 @@ export const REPORTS: ReportDef[] = [
     title: "Əməkdaşların siyahısı",
     description: "Bölmələr üzrə tam siyahı: vəzifə, heyət, işə qəbul tarixi, oklad",
     params: ["status"],
-    async run(scope, params) {
+    async run({ scope, hidden }, params) {
       const list = await employments(scope, params.status === "all" ? {} : { status: { not: "TERMINATED" } });
       const STATUS = { ACTIVE: "Aktiv", ON_LEAVE: "Məzuniyyətdə", TERMINATED: "Azad olunub" } as const;
       const rows = list.map((e, i) => ({
@@ -187,9 +199,11 @@ export const REPORTS: ReportDef[] = [
         category: STAFF_CATEGORY_LABELS[e.position.staffCategory],
         hireDate: formatAzDate(e.hireDate),
         unitShare: Number(e.unitShare),
-        salary: Number(e.baseSalary),
+        // Məxfi maaş: rəqəm yox, «Məxfi» (cəmə daxil edilmir)
+        salary: hidden.has(e.personId) ? SALARY_HIDDEN_LABEL : Number(e.baseSalary),
         status: STATUS[e.status],
       }));
+      const excluded = list.filter((e) => hidden.has(e.personId)).length;
       return {
         columns: [
           { key: "n", header: "№", type: "number", width: 6 },
@@ -205,6 +219,7 @@ export const REPORTS: ReportDef[] = [
         ],
         rows,
         totals: { name: `Cəmi: ${rows.length}`, salary: round2(sum(rows, "salary")), unitShare: round2(sum(rows, "unitShare")) },
+        ...(excluded ? { note: `${SALARY_EXCLUDED_NOTE} (${excluded} müqavilə)` } : {}),
       };
     },
   },
@@ -213,7 +228,7 @@ export const REPORTS: ReportDef[] = [
     title: "Kadr hərəkəti",
     description: "Seçilmiş dövrdə işə qəbul, köçürmə, vəzifə artımı, maaş / ştat dəyişikliyi, ödənişsiz məzuniyyət və azad olunma",
     params: ["period", "kind"],
-    async run(scope, params) {
+    async run({ scope, hidden }, params) {
       const now = new Date();
       const from = parseDay(params.from) ?? new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
       const to = parseDay(params.to) ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -226,7 +241,7 @@ export const REPORTS: ReportDef[] = [
             employment: { person: { deletedAt: null } },
             ...(scope ? { OR: [{ employment: { departmentId: { in: scope } } }, { fromDepartmentId: { in: scope } }, { toDepartmentId: { in: scope } }] } : {}),
           },
-          include: { employment: { select: { department: { select: { name: true } }, position: { select: { name: true } }, person: { select: { fullName: true, code: true } } } } },
+          include: { employment: { select: { personId: true, department: { select: { name: true } }, position: { select: { name: true } }, person: { select: { fullName: true, code: true } } } } },
         }),
         // Ödənişsiz məzuniyyət (ö/m, ö/sm) — başlama tarixi dövrə düşən, ləğv edilməmiş qeydlər (əmrli və idxaldan)
         prisma.absence.findMany({
@@ -274,16 +289,20 @@ export const REPORTS: ReportDef[] = [
           : []),
       ]);
       for (const m of moves) {
-        const diff = {
-          fromDepartment: m.fromDepartment,
-          toDepartment: m.toDepartment,
-          fromPosition: m.fromPosition,
-          toPosition: m.toPosition,
-          fromSalary: m.fromSalary === null ? null : Number(m.fromSalary),
-          toSalary: m.toSalary === null ? null : Number(m.toSalary),
-          fromUnitShare: m.fromUnitShare === null ? null : Number(m.fromUnitShare),
-          toUnitShare: m.toUnitShare === null ? null : Number(m.toUnitShare),
-        };
+        // Məxfi maaş: «oklad X → Y» yerinə «oklad: məxfi»
+        const diff = maskMovementSalary(
+          {
+            fromDepartment: m.fromDepartment,
+            toDepartment: m.toDepartment,
+            fromPosition: m.fromPosition,
+            toPosition: m.toPosition,
+            fromSalary: m.fromSalary === null ? null : Number(m.fromSalary),
+            toSalary: m.toSalary === null ? null : Number(m.toSalary),
+            fromUnitShare: m.fromUnitShare === null ? null : Number(m.fromUnitShare),
+            toUnitShare: m.toUnitShare === null ? null : Number(m.toUnitShare),
+          },
+          hidden.has(m.employment.personId),
+        );
         const { kind, details } = describeMovement(diff, m.kind);
         events.push({
           date: m.effectiveDate,
@@ -341,7 +360,7 @@ export const REPORTS: ReportDef[] = [
     title: "Elmi potensial",
     description: "Bölmələr üzrə elmi dərəcə və elmi adı olan əməkdaşlar",
     params: [],
-    async run(scope) {
+    async run({ scope }) {
       const groups = groupByDepartment(await employments(scope));
       const rows = groups.map((g) => {
         const people = [...new Map(g.items.map((e) => [e.personId, e.person])).values()];

@@ -8,6 +8,7 @@ import {
   HeartHandshakeIcon,
   HistoryIcon,
   IdCardIcon,
+  LockIcon,
   MailIcon,
   MapPinIcon,
   PalmtreeIcon,
@@ -20,6 +21,7 @@ import { PersonDocuments } from "@/components/employee/documents";
 import { FinanceHistoryTab } from "@/components/employee/finance-history";
 import { CancelLeaveButton, LeaveDialog } from "@/components/employee/leave-dialog";
 import { MovementDialog } from "@/components/employee/movement-dialog";
+import { SalaryRestrictionToggle } from "@/components/employee/salary-restriction-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -27,6 +29,7 @@ import { formatYmd } from "@/lib/calc/seniority";
 import { leaveDays, ON_LEAVE_LABELS, ORDER_LEAVE_LABELS, isOrderLeaveType } from "@/lib/leave-rules";
 import { describeMovement } from "@/lib/movement-rules";
 import { STAFF_CATEGORY_LABELS, type Dossier, type FinanceHistory, type PersonFormOptions } from "@/lib/queries";
+import { SALARY_HIDDEN_HINT, SALARY_HIDDEN_LABEL } from "@/lib/salary-privacy";
 import { cn, formatAzn, formatNumber, initials } from "@/lib/utils";
 import { formatAzDate } from "@/lib/validation/primitives";
 
@@ -36,6 +39,15 @@ import { formatAzDate } from "@/lib/validation/primitives";
 
 const d = (v: Date | null | undefined) => (v ? formatAzDate(v) : "—");
 const n = (v: unknown) => Number(v);
+
+/** Maaşın yerinə «Məxfi» nişanı (rəqəm serverdən heç gəlmir) */
+export function SalaryHiddenBadge({ className }: { className?: string }) {
+  return (
+    <Badge variant="outline" className={cn("gap-1 whitespace-nowrap", className)} title={SALARY_HIDDEN_HINT} data-salary-hidden>
+      <LockIcon className="size-3" /> {SALARY_HIDDEN_LABEL}
+    </Badge>
+  );
+}
 
 function Field({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
   return (
@@ -187,6 +199,7 @@ export function EmployeeDossier({
   movementOptions,
   finance,
   asOf,
+  salary = { hidden: false, locked: false, restricted: false, canMark: false, self: false, financeHidden: false },
 }: {
   data: Dossier;
   canEdit?: boolean;
@@ -198,6 +211,11 @@ export function EmployeeDossier({
   finance?: FinanceHistory;
   /** «Tarixə görə baxış» günü (YYYY-MM-DD) */
   asOf?: string;
+  /**
+   * Maaş məxfiliyi (server tərəfdə hesablanıb): hidden — maaş göstərilmir (data-da da yoxdur); locked — oklad dəyişdirilə
+   * bilməz; restricted — şəxs məxfidir; canMark — şəxs səviyyəsində məxfi işarəsini dəyişə bilər; self — istifadəçinin özü
+   */
+  salary?: { hidden: boolean; locked: boolean; restricted: boolean; canMark: boolean; self: boolean; financeHidden: boolean };
 }) {
   const { person: p, main, seniority, leave, payroll, carryover, unpaidLeave } = data;
   const status = main ? STATUS[main.status] : null;
@@ -215,6 +233,7 @@ export function EmployeeDossier({
             toSalary: m.toSalary === null ? null : n(m.toSalary),
             fromUnitShare: m.fromUnitShare === null ? null : n(m.fromUnitShare),
             toUnitShare: m.toUnitShare === null ? null : n(m.toUnitShare),
+            salaryMasked: m.salaryMasked,
           },
           m.kind,
         );
@@ -253,8 +272,9 @@ export function EmployeeDossier({
     .sort((a, b) => b.date.getTime() - a.date.getTime() || b._created.getTime() - a._created.getTime())
     .map(({ _created: _c, ...r }) => r);
   const leaveForm = canEdit && movementOptions && activeEmployments.length > 0 ? <LeaveDialog personId={p.id} updatedAt={p.updatedAt.toISOString()} /> : null;
+  // Öz dosyesində (imtiyazsız) vəzifə / oklad hərəkəti yoxdur — server də rədd edir
   const movementForm =
-    canEdit && movementOptions && activeEmployments.length > 0 ? (
+    canEdit && movementOptions && activeEmployments.length > 0 && !(salary.self && salary.locked) ? (
       <MovementDialog
         personId={p.id}
         updatedAt={p.updatedAt.toISOString()}
@@ -266,9 +286,11 @@ export function EmployeeDossier({
             label: `${e.position.name} · ${e.department.name}${e.isPrimary ? "" : " (əvəzçilik)"}`,
             departmentId: e.departmentId,
             positionId: e.positionId,
-            baseSalary: n(e.baseSalary),
+            baseSalary: e.baseSalary === null ? null : n(e.baseSalary),
             unitShare: n(e.unitShare),
           }))}
+        salaryLocked={salary.locked}
+        salaryHidden={salary.hidden}
       />
     ) : null;
 
@@ -327,7 +349,7 @@ export function EmployeeDossier({
           <div className="grid grid-cols-1 gap-1.5 sm:w-[460px] sm:shrink-0 sm:grid-cols-3 sm:gap-2" data-header-stats>
             <Stat compact label="Ümumi staj" value={`${seniority.total.years} il`} tone="primary" />
             <Stat compact label="Məzuniyyət hüququ" value={leave ? `${leave.total} gün` : "—"} tone="success" />
-            <Stat compact label="Netto maaş" value={payroll ? formatAzn(payroll.net) : "—"} />
+            <Stat compact label="Netto maaş" value={salary.hidden ? <SalaryHiddenBadge /> : payroll ? formatAzn(payroll.net) : "—"} />
           </div>
         </CardContent>
       </Card>
@@ -340,7 +362,7 @@ export function EmployeeDossier({
           <TabsTrigger value="contract">
             <BanknoteIcon /> Müqavilə və maaş
           </TabsTrigger>
-          {finance && (
+          {(finance || salary.financeHidden) && (
             <TabsTrigger value="finance">
               <HistoryIcon /> Maliyyə tarixçəsi
             </TabsTrigger>
@@ -515,7 +537,7 @@ export function EmployeeDossier({
                 { header: "Ödəniş forması", cell: (r) => r.paymentForm },
                 { header: "Qəbul", cell: (r) => d(r.hireDate), className: "tabular-nums" },
                 { header: "Ştat", cell: (r) => n(r.unitShare).toFixed(2), className: "tabular-nums" },
-                { header: "Oklad", cell: (r) => formatAzn(n(r.baseSalary)), className: "tabular-nums text-right" },
+                { header: "Oklad", cell: (r) => (r.baseSalary === null ? <SalaryHiddenBadge /> : formatAzn(n(r.baseSalary))), className: "tabular-nums text-right" },
                 {
                   header: "Status",
                   cell: (r) => (
@@ -532,6 +554,21 @@ export function EmployeeDossier({
               ]}
             />
           </Section>
+          {(salary.hidden || salary.restricted || salary.canMark) && (
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground" data-salary-privacy>
+              <LockIcon className="size-4 shrink-0" />
+              <span className="min-w-0 flex-1">
+                {salary.hidden
+                  ? "Bu əməkdaşın maaşı məxfidir — oklad, hesablama və maaş tarixçəsi yalnız root və səlahiyyətli hesaba görünür."
+                  : salary.self
+                    ? "Bu sizin dosyenizdir: maaşınızı görürsünüz, amma oklad və vəzifəni yalnız root və ya səlahiyyətli hesab dəyişə bilər."
+                    : salary.restricted
+                      ? "Bu əməkdaşın maaşı məxfidir — digər kadr əməkdaşlarına görünmür."
+                      : "Maaş məxfi deyil — bütün kadr əməkdaşlarına görünür."}
+              </span>
+              {salary.canMark && <SalaryRestrictionToggle personId={p.id} restricted={p.salaryRestricted} />}
+            </div>
+          )}
           {payroll && main && (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
               <Section title="Hesablama" description={`${main.position.name} · ${main.schedule}`} className="lg:col-span-2">
@@ -611,6 +648,15 @@ export function EmployeeDossier({
         {finance && (
           <TabsContent value="finance" className="flex flex-col gap-4">
             <FinanceHistoryTab data={finance} asOf={asOf} />
+          </TabsContent>
+        )}
+        {!finance && salary.financeHidden && (
+          <TabsContent value="finance" className="flex flex-col gap-4">
+            <Card>
+              <CardContent className="flex items-center gap-3 py-8 text-sm text-muted-foreground" data-finance-hidden>
+                <SalaryHiddenBadge /> Maliyyə tarixçəsi məxfidir — yalnız root və səlahiyyətli hesab görür.
+              </CardContent>
+            </Card>
           </TabsContent>
         )}
 

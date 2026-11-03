@@ -8,6 +8,7 @@ import { MovementOrderFields } from "@/components/employee/movement-fields";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DateInput } from "@/components/ui/date-input";
+import { SalaryInput } from "@/components/employee/salary-field";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -114,12 +115,15 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
   // Mövcud müqavilədə bölmə / vəzifə / oklad / ştat payı dəyişəndə əmr sahələri göstərilir (kadr hərəkəti)
   const [job, setJob] = useState({ baseSalary: v("baseSalary"), unitShare: v("unitShare") });
   const hasEmployment = editing && !!v("employmentId");
+  // Maaş məxfiliyi: kilidli oklad formada göndərilmir — server mövcud okladı saxlayır
+  const salaryLocked = v("salaryLocked") === "1";
+  const salaryHidden = v("salaryHidden") === "1";
   const num = (s: string, fallback: number) => (s.trim() === "" ? fallback : Number(s));
   const jobChanged =
     hasEmployment &&
     (selects.departmentId !== v("departmentId") ||
       selects.positionId !== v("positionId") ||
-      num(job.baseSalary, NaN) !== num(v("baseSalary"), NaN) ||
+      (!salaryLocked && num(job.baseSalary, NaN) !== num(v("baseSalary"), NaN)) ||
       num(job.unitShare, 1) !== num(v("unitShare"), 1));
   const set = (k: string) => (val: string) => {
     setSelects((s) => ({ ...s, [k]: val }));
@@ -221,7 +225,11 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
           <FormSelect name="positionId" value={selects.positionId!} onChange={set("positionId")} options={options.positions} placeholder="Seçin" optional invalid={!!fe.positionId} />
         </FormField>
         {field("hireDate", "İşə qəbul tarixi", { type: "date" })}
-        {field("baseSalary", "Oklad (₼)", {
+        {salaryLocked ? (
+          <FormField label="Oklad (₼)" htmlFor="baseSalary" error={fe.baseSalary} hint={salaryHidden ? "Maaş məxfidir" : "Okladı yalnız root və ya səlahiyyətli hesab dəyişə bilər"}>
+            <SalaryInput id="baseSalary" locked hidden={salaryHidden} value={v("baseSalary")} />
+          </FormField>
+        ) : field("baseSalary", "Oklad (₼)", {
           type: "number",
           inputMode: "decimal",
           step: "0.01",

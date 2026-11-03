@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { OriginalQr } from "@/components/print/original-qr";
 import { PrintBar, Sheet } from "@/components/print/print-bar";
 import { ReportTable } from "@/components/reports/report-table";
+import { hiddenSalaryPersonIds } from "@/lib/auth/salary-access";
 import { departmentScope } from "@/lib/auth/scope";
 import { requireUser } from "@/lib/auth/session";
 import { audit } from "@/lib/audit";
@@ -18,7 +19,7 @@ export default async function PrintReportPage({ searchParams }: { searchParams: 
   const sp = await searchParams;
   const report = getReport(sp.r);
   if (!report) notFound();
-  const result = await report.run(await departmentScope(user), readReportParams(sp));
+  const result = await report.run({ scope: await departmentScope(user), hidden: await hiddenSalaryPersonIds(user) }, readReportParams(sp));
   await audit({ user, action: "PRINT", entity: "Report", entityId: report.key, summary: `Hesabat çap üçün açıldı: ${report.title} (${result.rows.length} sətir)` });
   // Orijinal — eyni parametrlərlə sistemdəki hesabat səhifəsi
   const original = `/reports?${new URLSearchParams(sp as Record<string, string>)}`;

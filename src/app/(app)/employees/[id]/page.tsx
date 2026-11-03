@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import { EmployeeDossier } from "@/components/employee/dossier";
 import { PersonToolbar, SavedToast } from "@/components/employee/person-actions";
 import { can, canDeleteDocumentsDirectly } from "@/lib/auth/roles";
+import { salaryAccessFor } from "@/lib/auth/salary-access";
 import { canAccessPerson } from "@/lib/auth/scope";
 import { requireUser } from "@/lib/auth/session";
 import { getDossier, getFinanceHistory, getPersonFormOptions } from "@/lib/queries";
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const data = await getDossier(id);
+  const data = await getDossier(id, { hideSalary: true });
   return { title: data?.person.fullName ?? "Əməkdaş" };
 }
 
@@ -22,7 +23,9 @@ export default async function EmployeePage({ params, searchParams }: { params: P
   const user = await requireUser("employees.view");
   const { id } = await params;
   const canEdit = can(user.role, "employees.edit");
-  const data = await getDossier(id);
+  // Maaş məxfiliyi: gizlədilən maaş sorğudan sonra nəticədən çıxarılır — RSC payload-a düşmür
+  const salary = await salaryAccessFor(user, id);
+  const data = await getDossier(id, { hideSalary: !salary.visible });
   // Arxivdəki qeydləri yalnız redaktə hüququ olanlar görür; şöbə rəhbəri yalnız öz bölməsini
   if (!data || (data.person.deletedAt && !canEdit) || !(data.person.deletedAt || (await canAccessPerson(user, id)))) notFound();
   const p = data.person;
@@ -30,10 +33,12 @@ export default async function EmployeePage({ params, searchParams }: { params: P
   const movementOptions = canEdit && !p.deletedAt ? await getPersonFormOptions() : undefined;
   // Maliyyə tarixçəsi yalnız «finance.history» icazəsi ilə (root, kadr) — şöbə rəhbərinə məlumat ümumiyyətlə sorğulanmır / ötürülmür
   const sp = await searchParams;
-  const canFinance = can(user.role, "finance.history");
+  const canFinance = can(user.role, "finance.history") && salary.visible;
   const asOfIso = sp.asOf && /^\d{4}-\d{2}-\d{2}$/.test(sp.asOf) && !Number.isNaN(new Date(`${sp.asOf}T00:00:00Z`).getTime()) ? sp.asOf : undefined;
   const finance = canFinance ? ((await getFinanceHistory(id, asOfIso ? new Date(`${asOfIso}T00:00:00Z`) : null)) ?? undefined) : undefined;
-  const tab = sp.tab === "finance" && !finance ? undefined : sp.tab;
+  // Maaşı gizlədilən şəxsdə tab qalır, amma yalnız «Məxfi» nişanı göstərir (məlumat sorğulanmır)
+  const financeHidden = can(user.role, "finance.history") && !salary.visible;
+  const tab = sp.tab === "finance" && !finance && !financeHidden ? undefined : sp.tab;
 
   return (
     <>
@@ -54,7 +59,16 @@ export default async function EmployeePage({ params, searchParams }: { params: P
           </div>
         </div>
       )}
-      <EmployeeDossier data={data} canEdit={canEdit} canDelete={canDeleteDocumentsDirectly(user)} tab={tab} movementOptions={movementOptions} finance={finance} asOf={asOfIso} />
+      <EmployeeDossier
+        data={data}
+        canEdit={canEdit}
+        canDelete={canDeleteDocumentsDirectly(user)}
+        tab={tab}
+        movementOptions={movementOptions}
+        finance={finance}
+        asOf={asOfIso}
+        salary={{ hidden: !salary.visible, locked: !salary.editable, restricted: salary.restricted, canMark: salary.privileged && canEdit, self: salary.self, financeHidden }}
+      />
       <p className="mt-6 text-xs text-muted-foreground">
         Qeydiyyata alan: {p.createdBy ? `${p.createdBy.fullName} (@${p.createdBy.username})` : "idxal / sistem"} · {formatDateTime(p.createdAt)}
         {p.updatedBy && ` — son dəyişiklik: ${p.updatedBy.fullName} (@${p.updatedBy.username}) · ${formatDateTime(p.updatedAt)}`}

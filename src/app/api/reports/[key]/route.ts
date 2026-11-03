@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { hiddenSalaryPersonIds } from "@/lib/auth/salary-access";
 import { departmentScope } from "@/lib/auth/scope";
 import { apiUser } from "@/lib/auth/session";
 import { audit } from "@/lib/audit";
@@ -16,7 +17,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ key:
   const report = getReport((await params).key);
   if (!report) return Response.json({ error: "Hesabat tapılmadı" }, { status: 404 });
   const sp = new URL(request.url).searchParams;
-  const result = await report.run(await departmentScope(user), readReportParams(sp));
+  const result = await report.run({ scope: await departmentScope(user), hidden: await hiddenSalaryPersonIds(user) }, readReportParams(sp));
   // Orijinal — eyni parametrlərlə sistemdəki hesabat səhifəsi
   const original = await absoluteUrl(`/reports?${new URLSearchParams({ r: report.key, ...Object.fromEntries(sp) })}`);
 

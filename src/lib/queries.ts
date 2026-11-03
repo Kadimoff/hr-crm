@@ -16,6 +16,7 @@ import {
   type PersonNow,
 } from "./finance-history";
 import { activeUnpaidLeave } from "./leave-rules";
+import { maskMovementSalary } from "./salary-privacy";
 import { personScopeWhere } from "./auth/scope";
 import { UNIT_GROUPS, type UnitGroup, type UnitNode } from "./personnel";
 import { prisma } from "./db";
@@ -115,7 +116,10 @@ export type SidebarSummary = Awaited<ReturnType<typeof getSidebarSummary>>;
  * scope — şöbə rəhbəri üçün bölmə id-ləri; archived — yalnız arxivdəkilər;
  * employment — yalnız belə aktiv iş yeri olanlar, sətirdəki vəzifə/bölmə də həmin iş yerindən götürülür
  */
-export async function getEmployeeRows(scope: string[] | null = null, opts: { archived?: boolean; employment?: Prisma.EmploymentWhereInput } = {}) {
+export async function getEmployeeRows(
+  scope: string[] | null = null,
+  opts: { archived?: boolean; employment?: Prisma.EmploymentWhereInput; /** Maaşı gizlədilən şəxslər — oklad null göndərilir */ hidden?: ReadonlySet<string> } = {},
+) {
   const match: Prisma.EmploymentWhereInput | undefined = opts.employment && {
     AND: [opts.employment, scope ? { departmentId: { in: scope } } : {}],
     status: { not: "TERMINATED" },
@@ -156,6 +160,7 @@ export async function getEmployeeRows(scope: string[] | null = null, opts: { arc
   });
   return persons.map((p) => {
     const main = p.employments.find((e) => e.status !== "TERMINATED") ?? p.employments[0];
+    const salaryHidden = !!opts.hidden?.has(p.id);
     return {
       id: p.id,
       code: p.code,
@@ -169,7 +174,9 @@ export async function getEmployeeRows(scope: string[] | null = null, opts: { arc
       staffCategory: main ? STAFF_CATEGORY_LABELS[main.position.staffCategory] : null,
       department: main?.department.name ?? null,
       hireDate: main?.hireDate.toISOString() ?? null,
-      baseSalary: main ? Number(main.baseSalary) : null,
+      // Məxfi maaş: rəqəm ümumiyyətlə göndərilmir (sıralama/filtr ilə də sızmır)
+      baseSalary: main && !salaryHidden ? Number(main.baseSalary) : null,
+      salaryHidden,
       status: main?.status ?? null,
       contracts: p._count.employments,
       createdBy: p.createdBy?.username ?? null,
@@ -190,8 +197,13 @@ export type EmployeeRow = Awaited<ReturnType<typeof getEmployeeRows>>[number];
 //  Əməkdaş 360° dosyesi
 // ----------------------------------------------------------------------------
 
-export async function getDossier(id: string) {
-  const p = await prisma.person.findUnique({
+/**
+ * hideSalary — maaş məxfidir (çağıran tərəf {@link hiddenSalaryPersonIds} ilə yoxlayır): oklad, oklad tarixçəsi,
+ * hərəkətlərin əvvəl→sonra okladı və əməkhaqqı hesablaması nəticədən çıxarılır — RSC payload-a da düşmür.
+ */
+export async function getDossier(id: string, opts: { hideSalary?: boolean } = {}) {
+  const hide = !!opts.hideSalary;
+  const raw = await prisma.person.findUnique({
     where: { id },
     include: {
       createdBy: { select: { username: true, fullName: true } },
@@ -234,7 +246,16 @@ export async function getDossier(id: string) {
       },
     },
   });
-  if (!p) return null;
+  if (!raw) return null;
+  const p = {
+    ...raw,
+    employments: raw.employments.map((e) => ({
+      ...e,
+      baseSalary: hide ? null : e.baseSalary,
+      salaryHistory: hide ? [] : e.salaryHistory,
+      movements: e.movements.map((m) => maskMovementSalary(m, hide)),
+    })),
+  };
 
   const today = todayUtc();
   const active = p.employments.filter((e) => e.status !== "TERMINATED");
@@ -264,25 +285,27 @@ export async function getDossier(id: string) {
       })()
     : null;
 
-  const payroll = main
-    ? computePayroll(
-        payrollInput({
-          baseSalary: main.baseSalary,
-          unitShare: main.unitShare,
-          // Güzəşt / əlavələr yalnız əsas iş yeri müqaviləsində (dashboard və hesabatlarla eyni qayda)
-          isPrimary: primaryEmploymentIds(active.map((e) => ({ ...e, personId: p.id }))).has(main.id),
-          position: main.position,
-          person: { taxExemptionClause: p.taxExemptionClause, academicDegrees: p.academicDegrees, academicTitles: p.academicTitles },
-        }),
-      )
-    : null;
+  // Maaş gizlədilibsə hesablama da yoxdur (brutto/netto okladdan geri hesablana bilər)
+  const payroll =
+    main && main.baseSalary !== null
+      ? computePayroll(
+          payrollInput({
+            baseSalary: main.baseSalary,
+            unitShare: main.unitShare,
+            // Güzəşt / əlavələr yalnız əsas iş yeri müqaviləsində (dashboard və hesabatlarla eyni qayda)
+            isPrimary: primaryEmploymentIds(active.map((e) => ({ ...e, personId: p.id }))).has(main.id),
+            position: main.position,
+            person: { taxExemptionClause: p.taxExemptionClause, academicDegrees: p.academicDegrees, academicTitles: p.academicTitles },
+          }),
+        )
+      : null;
 
   const carryover = p.leaveBalances.reduce(
     (s, b) => s + Number(b.basicDays) + Number(b.seniorityDays) + Number(b.hazardousDays) + Number(b.motherhoodDays),
     0,
   );
 
-  return { person: p, main, seniority, leave, payroll, carryover, unpaidLeave: activeUnpaidLeave(p.absences, today) };
+  return { person: p, main, seniority, leave, payroll, carryover, unpaidLeave: activeUnpaidLeave(p.absences, today), salaryHidden: hide };
 }
 
 export type Dossier = NonNullable<Awaited<ReturnType<typeof getDossier>>>;
@@ -299,6 +322,8 @@ export interface OrgNode {
   isFaculty: boolean;
   isChair: boolean;
   closed: boolean;
+  /** Maaşlar məxfidir (bölmənin öz işarəsi; alt bölmələr də məxfi sayılır) */
+  salaryRestricted: boolean;
   createdOn: string; // YYYY-MM-DD
   units: number;
   filled: number;
@@ -323,6 +348,7 @@ export async function getOrgTree(): Promise<OrgNode[]> {
       isFaculty: d.isFaculty,
       isChair: d.isChair,
       closed: !!d.closedOn && d.closedOn <= today,
+      salaryRestricted: d.salaryRestricted,
       createdOn: d.createdOn.toISOString().slice(0, 10),
       units: 0,
       filled: 0,
@@ -376,7 +402,10 @@ export interface OrgStaff {
   degree: string | null;
   title: string | null;
   hireDate: string;
-  baseSalary: number;
+  /** null — maaş məxfidir (göndərilmir) */
+  baseSalary: number | null;
+  /** Maaşı dəyişə bilməz (məxfi və ya öz maaşı) — sürətli redaktədə sahə kilidlidir */
+  salaryLocked: boolean;
   unitShare: number;
   isPrimary: boolean;
   status: "ACTIVE" | "ON_LEAVE";
@@ -387,8 +416,8 @@ export interface OrgStaff {
   email: string | null;
 }
 
-/** scope — şöbə rəhbəri üçün bölmə id-ləri (null = bütün təşkilat) */
-export async function getOrgStaff(scope: string[] | null): Promise<OrgStaff[]> {
+/** scope — şöbə rəhbəri üçün bölmə id-ləri (null = bütün təşkilat); hidden / locked — maaşı gizlədilən / kilidli şəxslər */
+export async function getOrgStaff(scope: string[] | null, salary: { hidden: ReadonlySet<string>; locked: ReadonlySet<string> }): Promise<OrgStaff[]> {
   const rows = await prisma.employment.findMany({
     where: { status: { not: "TERMINATED" }, person: { deletedAt: null }, ...(scope ? { departmentId: { in: scope } } : {}) },
     orderBy: { person: { fullName: "asc" } },
@@ -436,7 +465,8 @@ export async function getOrgStaff(scope: string[] | null): Promise<OrgStaff[]> {
       degree: degrees.includes("DSC") ? "Elmlər doktoru" : degrees.includes("PHD") ? "Fəlsəfə doktoru" : null,
       title: titles.includes("PROFESSOR") ? "Professor" : titles.includes("DOCENT") ? "Dosent" : null,
       hireDate: e.hireDate.toISOString(),
-      baseSalary: Number(e.baseSalary),
+      baseSalary: salary.hidden.has(e.person.id) ? null : Number(e.baseSalary),
+      salaryLocked: salary.locked.has(e.person.id),
       unitShare: Number(e.unitShare),
       isPrimary: e.isPrimary,
       status: e.status === "ON_LEAVE" ? "ON_LEAVE" : "ACTIVE",
@@ -476,8 +506,11 @@ export type PersonFormOptions = Awaited<ReturnType<typeof getPersonFormOptions>>
 
 const isoDay = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : "");
 
-/** Redaktə forması üçün başlanğıc dəyərlər (hamısı string — <input> üçün) */
-export async function getPersonFormValues(id: string): Promise<Record<string, string> | null> {
+/**
+ * Redaktə forması üçün başlanğıc dəyərlər (hamısı string — <input> üçün).
+ * salary.hidden — oklad göndərilmir ("salaryHidden"="1"); salary.locked — oklad sahəsi kilidlidir ("salaryLocked"="1").
+ */
+export async function getPersonFormValues(id: string, salary: { hidden: boolean; locked: boolean }): Promise<Record<string, string> | null> {
   const p = await prisma.person.findFirst({
     where: { id, deletedAt: null },
     include: { employments: { orderBy: { hireDate: "desc" } } },
@@ -516,7 +549,9 @@ export async function getPersonFormValues(id: string): Promise<Record<string, st
     hireDate: isoDay(main?.hireDate),
     schedule: main?.schedule ?? "",
     paymentForm: main?.paymentForm ?? "",
-    baseSalary: main ? String(Number(main.baseSalary)) : "",
+    baseSalary: main && !salary.hidden ? String(Number(main.baseSalary)) : "",
+    salaryHidden: salary.hidden ? "1" : "",
+    salaryLocked: salary.locked ? "1" : "",
     unitShare: main ? String(Number(main.unitShare)) : "",
     status: main?.status ?? "",
     terminationDate: isoDay(main?.terminationDate),

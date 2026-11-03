@@ -20,6 +20,9 @@ export interface FieldIssue {
 /** Siyahı vərəqində şəxsin başqa sətiri xətalı olduğu üçün yazılmayan etibarlı sətir */
 export const PERSON_GROUP_BLOCKED = "PERSON_GROUP_BLOCKED";
 
+/** Yazılıb, amma maaş sahəsi atlanıb: məxfi maaşı imtiyazsız istifadəçi idxal ilə dəyişə bilməz */
+export const SALARY_SKIPPED = "SALARY_SKIPPED";
+
 export type RawRow = Record<string, string>;
 
 export type TemplateKey =

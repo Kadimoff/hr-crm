@@ -6,6 +6,7 @@ import { z } from "zod";
 import { assertUser, AuthError } from "@/lib/auth/session";
 import { audit, diff, snapshot } from "@/lib/audit";
 import { prisma } from "@/lib/db";
+import { isSalaryPrivileged } from "@/lib/salary-privacy";
 
 export interface DeptFormState {
   ok?: boolean;
@@ -48,12 +49,19 @@ export async function saveDepartmentAction(_prev: DeptFormState, form: FormData)
     }
     const v = parsed.data;
     const flags = { isFaculty: v.kind === "faculty", isChair: v.kind === "chair" };
+    // «Maaşlar məxfidir» işarəsi yalnız root / səlahiyyətli hesabın formasında var; başqasından gəlsə — rədd
+    const salaryField = form.get("salaryRestrictedField") === "1";
+    if (salaryField && !isSalaryPrivileged(user)) throw new AuthError("Maaş məxfiliyini yalnız root və ya səlahiyyətli hesab dəyişə bilər", 403);
+    const salaryRestricted = salaryField ? form.get("salaryRestricted") === "on" : undefined;
 
     if (v.id) {
       const before = await prisma.department.findUnique({ where: { id: v.id } });
       if (!before) return { error: "Bölmə tapılmadı" };
-      const data = { code: v.code, name: v.name, createdOn: v.createdOn, ...flags };
-      const changes = diff(snapshot({ code: before.code, name: before.name, createdOn: before.createdOn, isFaculty: before.isFaculty, isChair: before.isChair }), snapshot(data));
+      const data = { code: v.code, name: v.name, createdOn: v.createdOn, ...flags, ...(salaryRestricted !== undefined ? { salaryRestricted } : {}) };
+      const changes = diff(
+        snapshot({ code: before.code, name: before.name, createdOn: before.createdOn, isFaculty: before.isFaculty, isChair: before.isChair, ...(salaryRestricted !== undefined ? { salaryRestricted: before.salaryRestricted } : {}) }),
+        snapshot(data),
+      );
       if (Object.keys(changes).length === 0) return { ok: true, id: v.id };
       await prisma.department.update({ where: { id: v.id }, data });
       await audit({ user, action: "UPDATE", entity: "Department", entityId: v.id, summary: `Struktur bölməsi dəyişdirildi: ${v.name}`, changes: changes as Prisma.InputJsonValue });
@@ -65,14 +73,14 @@ export async function saveDepartmentAction(_prev: DeptFormState, form: FormData)
     if (v.parentId && !parent) return { error: "Üst bölmə tapılmadı" };
     const level = parent ? parent.level + 1 : 1;
     if (level > MAX_LEVEL) return { error: `Struktur ən çox ${MAX_LEVEL} səviyyəli ola bilər` };
-    const created = await prisma.department.create({ data: { code: v.code, name: v.name, level, parentId: parent?.id ?? null, createdOn: v.createdOn, ...flags } });
+    const created = await prisma.department.create({ data: { code: v.code, name: v.name, level, parentId: parent?.id ?? null, createdOn: v.createdOn, ...flags, salaryRestricted: salaryRestricted ?? false } });
     await audit({
       user,
       action: "CREATE",
       entity: "Department",
       entityId: created.id,
       summary: `Yeni struktur bölməsi: ${v.name}${parent ? ` (${parent.name} daxilində)` : ""}`,
-      changes: snapshot({ code: v.code, name: v.name, level, parent: parent?.name ?? null }) as Prisma.InputJsonValue,
+      changes: snapshot({ code: v.code, name: v.name, level, parent: parent?.name ?? null, ...(salaryRestricted ? { salaryRestricted } : {}) }) as Prisma.InputJsonValue,
     });
     revalidate();
     return { ok: true, id: created.id };

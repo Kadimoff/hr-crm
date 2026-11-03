@@ -45,6 +45,8 @@ export interface DashboardRow {
   gross: number;
   net: number;
   employerCost: number;
+  /** Maaş məxfidir: gross/net/employerCost 0 göndərilib (cəmlərə daxil deyil) */
+  salaryHidden?: boolean;
   /** Bu gün məzuniyyətdə və ya işdə iştirak etmir */
   onLeave: boolean;
 }
@@ -134,6 +136,8 @@ export interface Kpis {
   payrollGross: number;
   payrollNet: number;
   payrollEmployerCost: number;
+  /** ƏH fonduna daxil edilməyən (maaşı məxfi) müqavilələr */
+  payrollHiddenContracts: number;
   activeLeaves: number;
 }
 
@@ -162,6 +166,7 @@ export function computeKpis(rows: DashboardRow[], staffing: StaffingRow[]): Kpis
     payrollGross: rows.reduce((s, r) => s + r.gross, 0),
     payrollNet: rows.reduce((s, r) => s + r.net, 0),
     payrollEmployerCost: rows.reduce((s, r) => s + r.employerCost, 0),
+    payrollHiddenContracts: rows.filter((r) => r.salaryHidden).length,
     activeLeaves: people(rows.filter((r) => r.onLeave)),
   };
 }

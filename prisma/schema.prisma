@@ -186,9 +186,12 @@ model Department {
   createdOn DateTime     @db.Date
   closedOn  DateTime?    @db.Date
 
-  staffingUnits StaffingUnit[]
-  employments   Employment[]
-  heads         User[] // şöbə rəhbərləri (DEPT_HEAD rolu)
+  staffingUnits    StaffingUnit[]
+  employments      Employment[]
+  heads            User[] // şöbə rəhbərləri (DEPT_HEAD rolu)
+  /// Maaşlar məxfidir: bu bölmədə və alt bölmələrində müqaviləsi olan (və olmuş) şəxslərin maaşını yalnız root
+  /// və «məxfi maaşları görə bilər» hesabları görür/dəyişir (root qoşur). Default false — heç nə dəyişmir.
+  salaryRestricted Boolean        @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -349,6 +352,11 @@ model Person {
   legalLiabilities  LegalLiability[]
   documents         PersonDocument[]
   financialChanges  FinancialChange[]
+
+  /// Maaş məxfiliyi şəxs səviyyəsində (bölmədən asılı olmayaraq) — root qoyur. Default false
+  salaryRestricted Boolean @default(false)
+  /// Bu şəxsə bağlanmış istifadəçi hesabları (tətbiq səviyyəsində ən çox bir) — bağlı şəxsin maaşı avtomatik məxfidir
+  userAccounts     User[]  @relation("UserPerson")
 
   // Qeydiyyat və arxiv (soft delete) — kim, nə vaxt
   createdById String?
@@ -944,23 +952,29 @@ enum UserRole {
 }
 
 model User {
-  id                 String      @id @default(cuid())
-  username           String      @unique // kiçik hərflə saxlanılır
-  fullName           String
-  passwordHash       String
-  role               UserRole
-  departmentId       String? // DEPT_HEAD üçün məcburi
-  department         Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  isActive           Boolean     @default(true)
+  id                        String      @id @default(cuid())
+  username                  String      @unique // kiçik hərflə saxlanılır
+  fullName                  String
+  passwordHash              String
+  role                      UserRole
+  departmentId              String? // DEPT_HEAD üçün məcburi
+  department                Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  isActive                  Boolean     @default(true)
   /// Şəxsi iş sənədlərini sorğusuz silə bilər (ROOT həmişə silir) — root verir
-  canDeleteDocuments Boolean     @default(false)
+  canDeleteDocuments        Boolean     @default(false)
   /// true — növbəti girişdə şifrəni dəyişməlidir (root yaradanda / sıfırlayanda); o vaxta qədər yalnız şifrə dəyişmə səhifəsi açılır
-  mustChangePassword Boolean     @default(false)
-  passwordChangedAt  DateTime?
-  lastLoginAt        DateTime?
-  createdById        String?
-  createdBy          User?       @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdUsers       User[]      @relation("UserCreatedBy")
+  mustChangePassword        Boolean     @default(false)
+  /// Hesabın sahibi olan əməkdaş (root bağlayır). Bağlı şəxs öz maaşını görür (dəyişə bilmir), digər HR-lar görmür.
+  /// @unique əvəzinə tətbiq səviyyəsində unikal — canlıda `db push` unikal indeks xəbərdarlığı ilə dayanmasın
+  personId                  String?
+  person                    Person?     @relation("UserPerson", fields: [personId], references: [id], onDelete: SetNull)
+  /// Məxfi maaşları görə və dəyişə bilər (root verir — məs. kadr şöbəsinin müdiri). Default false
+  canViewRestrictedSalaries Boolean     @default(false)
+  passwordChangedAt         DateTime?
+  lastLoginAt               DateTime?
+  createdById               String?
+  createdBy                 User?       @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers              User[]      @relation("UserCreatedBy")
 
   sessions          Session[]
   auditLogs         AuditLog[]
@@ -978,6 +992,8 @@ model User {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([personId])
 }
 
 model Session {

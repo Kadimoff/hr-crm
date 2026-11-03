@@ -25,6 +25,7 @@ import {
   RotateCcwIcon,
   SearchIcon,
   SearchXIcon,
+  LockIcon,
   UsersIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -37,6 +38,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { replaceUrlParams, searchHaystack, searchKey } from "@/lib/list-state";
 import type { EmployeeRow } from "@/lib/queries";
+import { SALARY_HIDDEN_HINT, SALARY_HIDDEN_LABEL } from "@/lib/salary-privacy";
 import { cn, formatAzn, formatIsoDate, initials } from "@/lib/utils";
 
 const VISIBILITY_KEY = "ehr-employee-columns";
@@ -121,8 +123,15 @@ const columns: ColumnDef<EmployeeRow>[] = [
     accessorKey: "baseSalary",
     header: "Oklad",
     size: 108,
-    cell: ({ getValue }) => {
+    // Məxfi maaş serverdən null gəlir (boş okladlı sətirlər kimi) — sıralama ilə də rəqəm sızmır
+    cell: ({ getValue, row }) => {
       const v = getValue<number | null>();
+      if (row.original.salaryHidden)
+        return (
+          <Badge variant="outline" className="gap-1 whitespace-nowrap" title={SALARY_HIDDEN_HINT} data-salary-hidden>
+            <LockIcon className="size-3" /> {SALARY_HIDDEN_LABEL}
+          </Badge>
+        );
       return v === null ? <Empty /> : <span className="whitespace-nowrap tabular-nums">{formatAzn(v)}</span>;
     },
   },

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { EmployeeGrid } from "@/components/employee/employee-grid";
 import { PageHeader } from "@/components/layout/page-header";
 import { can } from "@/lib/auth/roles";
+import { hiddenSalaryPersonIds } from "@/lib/auth/salary-access";
 import { departmentScope, departmentSubtree } from "@/lib/auth/scope";
 import { requireUser } from "@/lib/auth/session";
 import { findUnit, personnelCategory } from "@/lib/personnel";
@@ -35,6 +36,7 @@ export default async function PersonnelPage({ params }: { params: Params }) {
 
   const rows = await getEmployeeRows(await departmentScope(user), {
     employment: { position: category.where, ...(current ? { departmentId: { in: await departmentSubtree(current.id) } } : {}) },
+    hidden: await hiddenSalaryPersonIds(user),
   });
 
   return (

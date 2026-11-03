@@ -6,6 +6,7 @@ import { startTransition, useActionState, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { recordMovementAction, type MovementFormState } from "@/actions/persons";
 import { MovementOrderFields } from "@/components/employee/movement-fields";
+import { SalaryInput } from "@/components/employee/salary-field";
 import { FormSelect } from "@/components/employee/person-form";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -19,12 +20,28 @@ export interface MovementEmployment {
   label: string;
   departmentId: string;
   positionId: string;
-  baseSalary: number;
+  /** null — maaş məxfidir */
+  baseSalary: number | null;
   unitShare: number;
 }
 
 /** Dosyedə «Kadr hərəkəti» — növ (köçürmə, vəzifə artımı, maaş / ştat dəyişikliyi), əmr nömrəsi, əmr və qüvvəyə minmə tarixi, yeni bölmə / vəzifə / oklad / ştat payı */
-export function MovementDialog({ personId, updatedAt, employments, options }: { personId: string; updatedAt: string; employments: MovementEmployment[]; options: PersonFormOptions }) {
+export function MovementDialog({
+  personId,
+  updatedAt,
+  employments,
+  options,
+  salaryLocked = false,
+  salaryHidden = false,
+}: {
+  personId: string;
+  updatedAt: string;
+  employments: MovementEmployment[];
+  options: PersonFormOptions;
+  /** Oklad dəyişdirilə bilməz (məxfi maaş) — sahə göndərilmir, server mövcud okladı saxlayır */
+  salaryLocked?: boolean;
+  salaryHidden?: boolean;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState<MovementFormState, FormData>(recordMovementAction, {});
@@ -109,7 +126,7 @@ export function MovementDialog({ personId, updatedAt, employments, options }: { 
               <FormSelect name="positionId" value={sel.positionId} onChange={(v) => setSel((s) => ({ ...s, positionId: v }))} options={options.positions} placeholder="Seçin" invalid={!!fe.positionId} />
             </FormField>
             <FormField label="Oklad (₼)" htmlFor="baseSalary" error={fe.baseSalary} required>
-              <Input id="baseSalary" name="baseSalary" type="number" step="0.01" min="0" defaultValue={emp.baseSalary} className="tabular-nums" aria-invalid={!!fe.baseSalary} />
+              <SalaryInput id="baseSalary" name="baseSalary" locked={salaryLocked} hidden={salaryHidden} value={emp.baseSalary} aria-invalid={!!fe.baseSalary} />
             </FormField>
             <FormField label="Ştat payı" htmlFor="unitShare" error={fe.unitShare} required>
               <Input id="unitShare" name="unitShare" type="number" step="0.25" min="0.25" max="2" defaultValue={emp.unitShare} aria-invalid={!!fe.unitShare} />

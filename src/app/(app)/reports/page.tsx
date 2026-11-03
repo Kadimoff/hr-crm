@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { ReportParams } from "@/components/reports/report-params";
 import { ReportTable } from "@/components/reports/report-table";
 import { Card } from "@/components/ui/card";
+import { hiddenSalaryPersonIds } from "@/lib/auth/salary-access";
 import { departmentScope } from "@/lib/auth/scope";
 import { requireUser } from "@/lib/auth/session";
 import { getReport, readReportParams, REPORTS } from "@/lib/reports";
@@ -16,7 +17,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const user = await requireUser("reports");
   const sp = await searchParams;
   const report = getReport(sp.r) ?? REPORTS[0]!;
-  const result = await report.run(await departmentScope(user), readReportParams(sp));
+  const result = await report.run({ scope: await departmentScope(user), hidden: await hiddenSalaryPersonIds(user) }, readReportParams(sp));
   const now = new Date();
   const defaults = { from: `${now.getUTCFullYear()}-01-01`, to: now.toISOString().slice(0, 10) };
 

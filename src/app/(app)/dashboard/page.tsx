@@ -3,6 +3,7 @@ import { DashboardView } from "@/components/dashboard/dashboard-view";
 import { RecentImports } from "@/components/dashboard/recent-imports";
 import { PageHeader } from "@/components/layout/page-header";
 import { can } from "@/lib/auth/roles";
+import { hiddenSalaryPersonIds } from "@/lib/auth/salary-access";
 import { departmentScope } from "@/lib/auth/scope";
 import { requireUser } from "@/lib/auth/session";
 import { getDashboardDataset } from "@/lib/dashboard/data";
@@ -20,7 +21,7 @@ function academicYear(d = new Date()) {
 export default async function DashboardPage() {
   const user = await requireUser();
   const canImport = can(user.role, "import");
-  const [data, recent] = await Promise.all([getDashboardDataset(await departmentScope(user)), canImport ? getRecentImports() : Promise.resolve([])]);
+  const [data, recent] = await Promise.all([getDashboardDataset(await departmentScope(user), await hiddenSalaryPersonIds(user)), canImport ? getRecentImports() : Promise.resolve([])]);
   return (
     <>
       <PageHeader

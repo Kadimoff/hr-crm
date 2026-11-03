@@ -304,6 +304,8 @@ export async function wipeDatabase(actor: string): Promise<{ backup: string; row
       for (const t of targets) rows += Number((await tx.$queryRawUnsafe<{ n: bigint }[]>(`SELECT count(*) AS n FROM ${q(t)}`))[0]!.n);
       // Şöbə rəhbərlərinin bölmə bağlantısı (bölmələr silinir)
       await tx.user.updateMany({ where: { departmentId: { not: null } }, data: { departmentId: null } });
+      // Hesabların əməkdaş bağlantısı (maaş məxfiliyi) — şəxslər silinir
+      await tx.user.updateMany({ where: { personId: { not: null } }, data: { personId: null } });
       await deleteTables(tx, targets, fks);
     },
     { timeout: 10 * 60_000 },
