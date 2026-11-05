@@ -11,6 +11,8 @@ fi
 case "$1" in
   app)
     npx prisma db push --skip-generate
+    # Təcili ROOT şifrə bərpası — yalnız ROOT_RESET_HASH_B64 verildikdə (scripts/reset-root.ts)
+    if [ -n "${ROOT_RESET_HASH_B64:-}" ]; then npx tsx scripts/reset-root.ts || true; fi
     exec npx next start -H 0.0.0.0 -p "${PORT:-3000}"
     ;;
   worker)

@@ -14,6 +14,9 @@ services:
       TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
       # Verilsə, avtomatik backup-ların AES-256-GCM ilə şifrəli nüsxəsi storage/backups/offsite-a yazılır (README → Server xaricində backup)
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      # Təcili ROOT şifrə bərpası (scripts/reset-root.ts): hashPassword() nəticəsinin base64-ü; işdən sonra silin
+      ROOT_RESET_HASH_B64: ${ROOT_RESET_HASH_B64:-}
+      ROOT_RESET_USERNAME: ${ROOT_RESET_USERNAME:-}
     volumes:
       - storage:/app/storage
     ports:
