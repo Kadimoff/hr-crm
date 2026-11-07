@@ -14,6 +14,7 @@ import { ORDER_LEAVE_TYPES } from "@/lib/leave-rules";
 import { applyLeave, cancelLeave } from "@/lib/leaves";
 import { MOVEMENT_KINDS } from "@/lib/movement-rules";
 import { applyMovement, MovementError } from "@/lib/movements";
+import { ACK_REASON, ensureJobDescriptionAcks } from "@/lib/job-description-acks";
 import { lockedSalaryInput, SALARY_LOCKED_MESSAGE } from "@/lib/salary-privacy";
 import { finCode, optEmail } from "@/lib/validation/primitives";
 
@@ -76,6 +77,9 @@ const formSchema = z
     baseSalary: z.preprocess(blank, z.coerce.number({ invalid_type_error: "Rəqəm daxil edin" }).min(0, "Mənfi ola bilməz").max(1_000_000).optional()),
     unitShare: z.preprocess(blank, z.coerce.number({ invalid_type_error: "Rəqəm daxil edin" }).gt(0, "0-dan böyük olmalıdır").max(2).optional()),
     status: z.preprocess(blank, z.enum(["ACTIVE", "ON_LEAVE", "TERMINATED"]).optional()),
+    /** TZ M05-02/03: müddətli / müddətsiz və bitmə tarixi (90/60/30 günlük siyahı) */
+    contractType: z.preprocess(blank, z.enum(["MUDDETLI", "MUDDETSIZ"], { errorMap: () => ({ message: "Növü seçin" }) }).optional()),
+    contractEndDate: optDate,
     terminationDate: optDate,
     terminationArticle: optStr,
     // Mövcud müqavilədə bölmə / vəzifə / oklad / ştat payı dəyişəndə — kadr hərəkətinin əmri
@@ -100,6 +104,8 @@ const formSchema = z
       if (!v.idDocType) ctx.addIssue({ code: "custom", path: ["idDocType"], message: "Sənədin növü boş ola bilməz" });
       if (!v.idDocNumber) ctx.addIssue({ code: "custom", path: ["idDocNumber"], message: "Sənədin nömrəsi boş ola bilməz" });
     }
+    if (v.contractType === "MUDDETLI" && !v.contractEndDate) ctx.addIssue({ code: "custom", path: ["contractEndDate"], message: "Müddətli müqavilədə bitmə tarixi məcburidir" });
+    if (v.contractEndDate && v.hireDate && v.contractEndDate < v.hireDate) ctx.addIssue({ code: "custom", path: ["contractEndDate"], message: "Bitmə tarixi işə qəbuldan əvvəl ola bilməz" });
     if (v.status === "TERMINATED" && !v.terminationDate) ctx.addIssue({ code: "custom", path: ["terminationDate"], message: "Azad olunma tarixini daxil edin" });
     if (v.terminationDate && v.hireDate && v.terminationDate < v.hireDate)
       ctx.addIssue({ code: "custom", path: ["terminationDate"], message: "Azad olunma tarixi işə qəbuldan əvvəl ola bilməz" });
@@ -168,6 +174,8 @@ function employmentData(v: FormValues) {
     baseSalary: v.baseSalary,
     unitShare: v.unitShare ?? 1,
     status,
+    contractType: v.contractType ?? null,
+    contractEndDate: v.contractType === "MUDDETSIZ" ? null : (v.contractEndDate ?? null),
     terminationDate: status === "TERMINATED" ? (v.terminationDate ?? null) : null,
     terminationArticle: status === "TERMINATED" ? (v.terminationArticle ?? null) : null,
   };
@@ -238,8 +246,10 @@ export async function savePersonAction(_prev: PersonFormState, form: FormData): 
             createdById: user.id,
             ...(emp ? { employments: { create: { ...emp, salaryHistory: { create: { baseSalary: emp.baseSalary!, validFrom: emp.hireDate! } } } } } : {}),
           },
-          select: { id: true },
+          select: { id: true, employments: { select: { id: true } } },
         });
+        // İşə qəbul: qüvvədə olan vəzifə təlimatı ilə tanışlıq tapşırığı (TZ M03-02)
+        await ensureJobDescriptionAcks(tx, created.employments.map((e) => e.id), ACK_REASON.HIRE);
         await audit(
           {
             user,
@@ -326,7 +336,8 @@ export async function savePersonAction(_prev: PersonFormState, form: FormData): 
           await tx.employment.update({ where: { id: current.id }, data: rest });
         } else {
           if (!emp.hireDate || emp.baseSalary === undefined) throw new FieldsError("Yeni müqavilə üçün işə qəbul tarixi və oklad məcburidir", { hireDate: "İşə qəbul tarixi boş ola bilməz" });
-          await tx.employment.create({ data: { personId: v.id, ...emp, salaryHistory: { create: { baseSalary: emp.baseSalary, validFrom: emp.hireDate } } } });
+          const ce = await tx.employment.create({ data: { personId: v.id, ...emp, salaryHistory: { create: { baseSalary: emp.baseSalary, validFrom: emp.hireDate } } }, select: { id: true } });
+          await ensureJobDescriptionAcks(tx, [ce.id], ACK_REASON.HIRE);
           changes.employment = [null, snapshot(emp)];
         }
       }

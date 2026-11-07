@@ -34,6 +34,11 @@ const MARITAL: Option[] = [
   { value: "DIVORCED", label: "Boşanmış" },
   { value: "WIDOWED", label: "Dul" },
 ];
+const CONTRACT_TYPES: Option[] = [
+  { value: "MUDDETSIZ", label: "Müddətsiz" },
+  { value: "MUDDETLI", label: "Müddətli" },
+];
+
 const STATUS: Option[] = [
   { value: "ACTIVE", label: "Aktiv" },
   { value: "ON_LEAVE", label: "Məzuniyyətdə" },
@@ -111,6 +116,7 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
     departmentId: v("departmentId"),
     positionId: v("positionId"),
     status: v("status") || "ACTIVE",
+    contractType: v("contractType"),
   });
   // Mövcud müqavilədə bölmə / vəzifə / oklad / ştat payı dəyişəndə əmr sahələri göstərilir (kadr hərəkəti)
   const [job, setJob] = useState({ baseSalary: v("baseSalary"), unitShare: v("unitShare") });
@@ -193,9 +199,15 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
 
       <Section icon={IdCardIcon} title="Şəxsiyyət sənədi">
         {field("fin", "FİN kod", { required: true, maxLength: 7, className: "font-mono uppercase", hint: "7 simvol, latın hərfləri və rəqəmlər" })}
-        {field("idDocType", "Sənədin növü", { required: true, placeholder: "Şəxsiyyət vəsiqəsi", defaultValue: v("idDocType") || "Şəxsiyyət vəsiqəsi" })}
+        {/* Yeni əməkdaşda məcburidir; miqrasiyadan «məlum deyil» gələn qeyddə boş saxlanıla bilər (doldurulana qədər) */}
+        {field("idDocType", "Sənədin növü", {
+          required: !editing || !!v("idDocType"),
+          placeholder: "Şəxsiyyət vəsiqəsi",
+          defaultValue: v("idDocType") || (editing ? "" : "Şəxsiyyət vəsiqəsi"),
+          hint: editing && !v("idDocType") ? "Məlum deyil — doldurun" : undefined,
+        })}
         {field("idDocSeries", "Seriya", { placeholder: "AZE" })}
-        {field("idDocNumber", "Nömrə", { required: true })}
+        {field("idDocNumber", "Nömrə", { required: !editing || !!v("idDocNumber"), hint: editing && !v("idDocNumber") ? "Məlum deyil — doldurun" : undefined })}
         {field("idDocIssueDate", "Verilmə tarixi", { type: "date" })}
         {field("idDocIssuedBy", "Kim tərəfindən verilib")}
         {field("ssn", "SSN (sosial sığorta)")}
@@ -224,7 +236,7 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
         <FormField label="Vəzifə" htmlFor="positionId" error={fe.positionId}>
           <FormSelect name="positionId" value={selects.positionId!} onChange={set("positionId")} options={options.positions} placeholder="Seçin" optional invalid={!!fe.positionId} />
         </FormField>
-        {field("hireDate", "İşə qəbul tarixi", { type: "date" })}
+        {field("hireDate", "İşə qəbul tarixi", { type: "date", hint: hasEmployment && !v("hireDate") ? "Məlum deyil — doldurun" : undefined })}
         {salaryLocked ? (
           <FormField label="Oklad (₼)" htmlFor="baseSalary" error={fe.baseSalary} hint={salaryHidden ? "Maaş məxfidir" : "Okladı yalnız root və ya səlahiyyətli hesab dəyişə bilər"}>
             <SalaryInput id="baseSalary" locked hidden={salaryHidden} value={v("baseSalary")} />
@@ -256,8 +268,12 @@ export function PersonForm({ initial, options }: { initial?: Record<string, stri
         <FormField label="Status" htmlFor="status" error={fe.status}>
           <FormSelect name="status" value={selects.status!} onChange={set("status")} options={STATUS} placeholder="Aktiv" />
         </FormField>
-        {field("schedule", "İş rejimi", { placeholder: "5 günlük iş həftəsi" })}
-        {field("paymentForm", "Ödəniş forması", { placeholder: "Aylıq oklad" })}
+        {field("schedule", "İş rejimi", { placeholder: "5 günlük iş həftəsi", hint: hasEmployment && !v("schedule") ? "Məlum deyil — doldurun" : undefined })}
+        {field("paymentForm", "Ödəniş forması", { placeholder: "Aylıq oklad", hint: hasEmployment && !v("paymentForm") ? "Məlum deyil — doldurun" : undefined })}
+        <FormField label="Müqavilənin növü" htmlFor="contractType" error={fe.contractType}>
+          <FormSelect name="contractType" value={selects.contractType!} onChange={set("contractType")} options={CONTRACT_TYPES} placeholder="Qeyd edilməyib" optional />
+        </FormField>
+        {selects.contractType === "MUDDETLI" && field("contractEndDate", "Müqavilənin bitmə tarixi", { type: "date", required: true, hint: "90/60/30 gün qalmış «Müqavilə müddətləri» siyahısına düşür" })}
         {jobChanged && <MovementOrderFields fe={fe} className="sm:col-span-2 lg:col-span-3" />}
         {selects.status === "TERMINATED" && (
           <>

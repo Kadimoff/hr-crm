@@ -217,8 +217,12 @@ export async function getDossier(id: string, opts: { hideSalary?: boolean } = {}
           department: true,
           salaryHistory: { orderBy: { validFrom: "desc" } },
           movements: { orderBy: [{ effectiveDate: "desc" }, { createdAt: "desc" }], include: { createdBy: { select: { fullName: true, username: true } } } },
+          jobDescriptionAcks: {
+            orderBy: { assignedAt: "desc" },
+            include: { jobDescription: { select: { id: true, title: true, version: true, status: true } }, acknowledgedBy: { select: { fullName: true } } },
+          },
         },
-        orderBy: { hireDate: "desc" },
+        orderBy: { hireDate: { sort: "desc", nulls: "last" } },
       },
       workHistory: { orderBy: { startDate: "desc" } },
       militaryRecord: true,
@@ -243,6 +247,7 @@ export async function getDossier(id: string, opts: { hideSalary?: boolean } = {}
       legalLiabilities: true,
       documents: { orderBy: [{ documentDate: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }], include: {
           uploadedBy: { select: { fullName: true } },
+          verifiedBy: { select: { fullName: true } },
           deletionRequests: { where: { status: "PENDING" }, take: 1, select: { reason: true, requestedBy: { select: { fullName: true } } } },
         },
       },
@@ -635,6 +640,8 @@ export async function getPersonFormValues(id: string, salary: { hidden: boolean;
     status: main?.status ?? "",
     terminationDate: isoDay(main?.terminationDate),
     terminationArticle: main?.terminationArticle ?? "",
+    contractType: main?.contractType ?? "",
+    contractEndDate: isoDay(main?.contractEndDate),
   };
 }
 

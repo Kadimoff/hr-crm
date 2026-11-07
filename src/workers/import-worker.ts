@@ -8,6 +8,7 @@ import { emit } from "../lib/etl/progress";
 import { runCommit, runValidation } from "../lib/etl/pipeline";
 import { IMPORT_QUEUE, type ImportJobData } from "../lib/queue";
 import { createRedis } from "../lib/redis";
+import { applyDueDepartmentChanges } from "../lib/department-changes";
 
 const worker = new Worker<ImportJobData>(
   IMPORT_QUEUE,
@@ -38,10 +39,20 @@ const worker = new Worker<ImportJobData>(
 );
 
 worker.on("ready", () => console.log(`[import-worker] "${IMPORT_QUEUE}" növbəsi dinlənilir`));
+
+// Gələcək tarixə planlaşdırılmış struktur dəyişiklikləri (TZ M01-01): tarixi çatanlar saatda bir tətbiq olunur
+// (struktur səhifələri açılanda da yoxlanılır). Tətbiq oluna bilməyən (məs. aktiv müqavilə qalıb) gözləməkdə qalır.
+const applyPlanned = () =>
+  applyDueDepartmentChanges(prisma)
+    .then((r) => r.applied && console.log(`[import-worker] planlaşdırılmış struktur dəyişiklikləri: ${r.applied} tətbiq olundu, ${r.waiting} gözləyir`))
+    .catch((e) => console.error("[import-worker] struktur dəyişiklikləri:", e instanceof Error ? e.message : e));
+setTimeout(applyPlanned, 10_000);
+const plannedTimer = setInterval(applyPlanned, 60 * 60 * 1000);
 worker.on("completed", (job) => console.log(`[import-worker] ${job.data.kind} ${job.data.batchId} tamamlandı`));
 worker.on("failed", (job, err) => console.error(`[import-worker] ${job?.data.kind} ${job?.data.batchId} uğursuz:`, err.message));
 
 async function shutdown() {
+  clearInterval(plannedTimer);
   await worker.close();
   await prisma.$disconnect();
   process.exit(0);

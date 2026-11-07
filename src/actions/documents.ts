@@ -127,3 +127,52 @@ export async function rejectDeletionRequestAction(id: string, note: string): Pro
   refresh(req.personId);
   return {};
 }
+
+/**
+ * «Yoxlanılıb» işarəsi (TZ M05-01): sənəd əsli ilə tutuşdurulub — kim və nə vaxt. verified=false — işarə götürülür.
+ * Yoxlanılmış sənəd üçün də fayl dəyişdirilmir (yeni sənəd yüklənir).
+ */
+export async function verifyDocumentAction(documentId: string, verified: boolean): Promise<DocActionResult> {
+  try {
+    const user = await assertUser("employees.edit");
+    const doc = await findAccessibleDocument(user, documentId);
+    if (!doc) return { error: "Sənəd tapılmadı" };
+    if (!!doc.verifiedAt === verified) return {};
+    await prisma.$transaction(async (tx) => {
+      await tx.personDocument.update({ where: { id: documentId }, data: verified ? { verifiedAt: new Date(), verifiedById: user.id } : { verifiedAt: null, verifiedById: null } });
+      await audit(
+        {
+          user,
+          action: "UPDATE",
+          entity: "PersonDocument",
+          entityId: documentId,
+          summary: `Sənəd ${verified ? "«yoxlanılıb» işarələndi" : "işarəsi götürüldü"}: ${doc.person.fullName} — ${doc.title}`,
+        },
+        tx,
+      );
+    });
+    refresh(doc.personId);
+    return {};
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Xəta" };
+  }
+}
+
+/** Açılış stajı (miqrasiya) sənədlə tutuşdurulub — «yoxlanılıb» (DAT-02 / MIG-04) */
+export async function verifyOpeningSeniorityAction(personId: string): Promise<DocActionResult> {
+  try {
+    const user = await assertUser("employees.edit");
+    const p = await prisma.person.findFirst({ where: { id: personId, deletedAt: null }, select: { fullName: true, code: true, openingSeniorityYears: true } });
+    if (!p) return { error: "Əməkdaş tapılmadı" };
+    if (p.openingSeniorityYears === null) return { error: "Açılış stajı yoxdur" };
+    await prisma.$transaction(async (tx) => {
+      await tx.person.update({ where: { id: personId }, data: { openingSeniorityVerifiedAt: new Date(), openingSeniorityVerifiedBy: user.username, updatedById: user.id } });
+      await audit({ user, action: "UPDATE", entity: "Person", entityId: personId, summary: `Açılış stajı yoxlanıldı: ${p.fullName} (${p.code}) — ${Number(p.openingSeniorityYears)} il` }, tx);
+    });
+    revalidatePath(`/employees/${personId}`);
+    revalidatePath("/data-quality");
+    return {};
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Xəta" };
+  }
+}

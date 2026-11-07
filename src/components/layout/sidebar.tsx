@@ -4,7 +4,10 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { UserRole } from "@prisma/client";
 import {
   BriefcaseIcon,
+  CalendarClockIcon,
   ChevronDownIcon,
+  ClipboardCheckIcon,
+  LandmarkIcon,
   CrownIcon,
   DatabaseIcon,
   FileBarChartIcon,
@@ -39,7 +42,11 @@ export const NAV: { href: string; label: string; description: string; group: str
   { href: PERSONNEL_HREF, label: "Şəxsi iş", description: "Heyət və bölmələr üzrə", group: "Analitika", icon: FolderOpenIcon, permission: "employees.view" },
   { href: "/org-chart", label: "Struktur", description: "Struktur ağacı", group: "Analitika", icon: NetworkIcon },
   { href: "/reports", label: "Hesabatlar", description: "Çap və Excel ixracı", group: "Analitika", icon: FileBarChartIcon, permission: "reports" },
+  { href: "/structure", label: "Struktur reyestri", description: "Dəyişikliklər və əsasnamələr", group: "Kadr işi", icon: LandmarkIcon, permission: "employees.view" },
+  { href: "/positions", label: "Vəzifə kataloqu", description: "Vəzifə təlimatları, tanışlıq", group: "Kadr işi", icon: BriefcaseIcon, permission: "employees.view" },
+  { href: "/contracts", label: "Müqavilə müddətləri", description: "90/60/30 gün", group: "Kadr işi", icon: CalendarClockIcon, permission: "employees.view" },
   { href: "/import", label: "İdxal mərkəzi", description: "Excel şablonları", group: "Məlumat", icon: UploadCloudIcon, permission: "import" },
+  { href: "/data-quality", label: "Məlumat tamlığı", description: "Çatışmayan məcburi sahələr", group: "Məlumat", icon: ClipboardCheckIcon, permission: "employees.view" },
   { href: "/admin/users", label: "İstifadəçilər", description: "Rollar və səlahiyyətlər", group: "İdarəetmə", icon: ShieldIcon, permission: "users.manage" },
   { href: "/admin/requests", label: "Sorğular", description: "Sənəd silmə sorğuları", group: "İdarəetmə", icon: InboxIcon, permission: "requests.manage" },
   { href: "/admin/audit", label: "Audit jurnalı", description: "Dəyişikliklərin tarixçəsi", group: "İdarəetmə", icon: ScrollTextIcon, permission: "audit.view" },

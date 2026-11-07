@@ -47,6 +47,7 @@ import { SALARY_HIDDEN_HINT, SALARY_HIDDEN_LABEL } from "@/lib/salary-privacy";
 import type { OrgNode, OrgStaff, PersonFormOptions } from "@/lib/queries";
 import { useBackToClose } from "@/lib/use-back-close";
 import { cn, formatAzn, formatIsoDate, formatNumber, initials } from "@/lib/utils";
+import { DEPARTMENT_KIND_LABELS, DEPARTMENT_KINDS, levelLabel } from "@/lib/org-structure";
 
 // ----------------------------------------------------------------------------
 //  Düzülüş: kök mərkəzdə, budaqlar iki tərəfə (mind map)
@@ -209,7 +210,6 @@ function edgePath(p: Placed) {
 //  Köməkçilər
 // ----------------------------------------------------------------------------
 
-const LEVEL_LABEL = ["", "1-ci səviyyə", "2-ci səviyyə", "3-cü səviyyə", "4-cü səviyyə"];
 const MAX_LEVEL = 4;
 /** Axtarış yazı dayandıqdan sonra tətbiq olunur — hər hərfdə bütün xəritə yenidən qurulmur */
 const SEARCH_DEBOUNCE_MS = 220;
@@ -1062,7 +1062,7 @@ function SearchResults({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{s ? s.fullName : d?.name}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">{s ? `${s.position} · ${d?.name ?? ""}` : `${d?.code} · ${d ? LEVEL_LABEL[d.level] : ""}`}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">{s ? `${s.position} · ${d?.name ?? ""}` : `${d?.code} · ${d ? levelLabel(d.level) : ""}`}</span>
                   </span>
                   {isActive && <span className="shrink-0 text-[10px] text-muted-foreground">Enter ↵</span>}
                 </button>
@@ -1157,7 +1157,7 @@ function RootCard({
         </span>
         <div className="min-w-0 flex-1">
           <div className="line-clamp-2 text-sm leading-tight font-bold">{d ? d.name : "ASOİU"}</div>
-          <div className="mt-0.5 text-[11px] text-blue-100">{d ? `${d.code} · ${LEVEL_LABEL[d.level]}` : "Azərbaycan Dövlət Neft və Sənaye Universiteti"}</div>
+          <div className="mt-0.5 text-[11px] text-blue-100">{d ? `${d.code} · ${levelLabel(d.level)}` : "Azərbaycan Dövlət Neft və Sənaye Universiteti"}</div>
         </div>
         {onAdd && (
           <NodeAction label={d ? "Alt bölmə əlavə et" : "Yeni 1-ci səviyyə bölmə"} onClick={onAdd} light>
@@ -1204,9 +1204,11 @@ function DeptCard({
   hit?: "match" | "active";
 }) {
   const d = node.dept!;
-  const Icon = d.isFaculty ? GraduationCapIcon : d.isChair ? LandmarkIcon : d.level === 1 ? BuildingIcon : UsersIcon;
+  const Icon = d.kind === "FAKULTE" ? GraduationCapIcon : d.kind === "KAFEDRA" ? LandmarkIcon : d.kind === "KURATOR_BLOKU" || d.level === 1 ? BuildingIcon : UsersIcon;
   // Budaq sayı: alt bölmələr + birbaşa heyət düyünü
   const count = d.children.length + (direct > 0 ? 1 : 0);
+  // Uzun adlar (məs. «… İnformasiya Texnologiyaları və İdarəetmə fakültəsi») — kiçik şrift, 3 sətir, tam ad title-da
+  const long = d.name.length > 56;
   return (
     <div className={cn("group relative flex h-full flex-col justify-between rounded-2xl border bg-card p-3 shadow-xs transition-shadow hover:shadow-md", d.closed && "opacity-50", hit === "match" && "ring-2 ring-primary/50", hit === "active" && "bg-amber-500/10 ring-4 ring-amber-400")}>
       <div className="flex items-start gap-2.5">
@@ -1214,10 +1216,27 @@ function DeptCard({
           <Icon className="size-4" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 text-[13px] leading-tight font-semibold">{d.name}</div>
-          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+          <div className={cn("leading-tight font-semibold break-words", long ? "line-clamp-3 text-[12px]" : "line-clamp-2 text-[13px]")} title={d.name} data-dept-name>
+            {d.name}
+          </div>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-[11px] whitespace-nowrap text-muted-foreground">
             <span className="font-mono">{d.code}</span>
-            <span className="tabular-nums">{d.headcount} nəfər</span>
+            {d.kind && (
+              <span className="rounded border px-1 text-[10px] leading-4" data-dept-kind={d.kind}>
+                {DEPARTMENT_KIND_LABELS[d.kind]}
+              </span>
+            )}
+            {d.isGroup ? <span title="Ştatsız qrup — ştat və vakansiya sayılmır">qrup</span> : <span className="tabular-nums">{d.headcount} nəfər</span>}
+            {d.isExternal && (
+              <span className="text-[10px] text-chart-4" title="Ayrıca hüquqi şəxs — üst bölmənin cəminə daxil deyil">
+                ayrıca h/ş
+              </span>
+            )}
+            {d.planned > 0 && (
+              <span className="text-[10px] text-warning" title="Gələcək tarixə planlaşdırılmış struktur dəyişikliyi var" data-dept-planned>
+                planlı
+              </span>
+            )}
             {d.salaryRestricted && (
               <span title="Maaşlar məxfidir" data-dept-salary-lock>
                 <LockIcon className="size-3" />
@@ -1318,11 +1337,7 @@ function StaffGrid({ node, selected, active, hits, onSelect }: { node: Placed; s
 //  Struktur bölməsi: əlavə / redaktə / silmə
 // ----------------------------------------------------------------------------
 
-const KIND_OPTIONS = [
-  { value: "faculty", label: "Fakültə" },
-  { value: "chair", label: "Kafedra" },
-  { value: "unit", label: "Şöbə / bölmə" },
-];
+const KIND_OPTIONS = [{ value: "none", label: "— seçilməyib" }, ...DEPARTMENT_KINDS.map((k) => ({ value: k, label: DEPARTMENT_KIND_LABELS[k] }))];
 
 /** Yeni bölmə üçün kod təklifi: valideynin kodu + növbəti sıra nömrəsi (F5 → F5-03) */
 function suggestCode(parent: OrgNode | null, tree: OrgNode[]) {
@@ -1373,7 +1388,7 @@ function DeptDialog({
   const parent = state.mode === "create" ? state.parent : null;
   const level = edit ? edit.level : parent ? parent.level + 1 : 1;
   const fe = form.ok ? {} : (form.fieldErrors ?? {});
-  const defaultKind = edit ? (edit.isFaculty ? "faculty" : edit.isChair ? "chair" : "unit") : level === 1 ? "faculty" : level === 2 ? "chair" : "unit";
+  const defaultKind = edit ? (edit.kind ?? "none") : level === 2 ? "FAKULTE" : level === 3 ? "KAFEDRA" : "none";
 
   const remove = () =>
     startDelete(async () => {
@@ -1402,7 +1417,7 @@ function DeptDialog({
           <DialogHeader>
             <DialogTitle>{edit ? edit.name : "Yeni struktur bölməsi"}</DialogTitle>
             <DialogDescription>
-              {edit ? `${LEVEL_LABEL[level]} · ${edit.headcount} nəfər` : parent ? `${parent.name} daxilində · ${LEVEL_LABEL[level]}` : "1-ci səviyyə — fakültə və ya inzibati bölmə"}
+              {edit ? `${levelLabel(level)} · ${edit.headcount} nəfər` : parent ? `${parent.name} daxilində · ${levelLabel(level)}` : "1-ci səviyyə — fakültə və ya inzibati bölmə"}
             </DialogDescription>
           </DialogHeader>
           {edit && <input type="hidden" name="id" value={edit.id} />}
@@ -1418,7 +1433,40 @@ function DeptDialog({
               <DateInput id="dept-created" name="createdOn" defaultValue={edit?.createdOn ?? new Date().toISOString().slice(0, 10)} />
             </FormField>
           </div>
-          <SelectField name="kind" label="Növü" value={defaultKind} options={KIND_OPTIONS} error={fe.kind} />
+          <input type="hidden" name="extendedFields" value="1" />
+          <div className="grid grid-cols-2 gap-3">
+            <SelectField name="kind" label="Növü" value={defaultKind} options={KIND_OPTIONS} error={fe.kind} />
+            <FormField label="Sıra" htmlFor="dept-sort" error={fe.sortOrder} hint="Eyni üst bölmə daxilində">
+              <Input id="dept-sort" name="sortOrder" type="number" inputMode="numeric" min={0} defaultValue={edit?.sortOrder ?? ""} placeholder="koda görə" />
+            </FormField>
+          </div>
+          <FormField label="Rəhbərin vəzifəsi" htmlFor="dept-head" error={fe.headPositionTitle}>
+            <Input id="dept-head" name="headPositionTitle" defaultValue={edit?.headPositionTitle ?? ""} placeholder="məs. Departament direktoru" />
+          </FormField>
+          <div className="grid grid-cols-2 gap-3">
+            <FormField label="Kampus" htmlFor="dept-campus" error={fe.campus}>
+              <Input id="dept-campus" name="campus" defaultValue={edit?.campus ?? ""} />
+            </FormField>
+            <FormField label="Büdcə mərkəzi" htmlFor="dept-budget" error={fe.budgetCenter}>
+              <Input id="dept-budget" name="budgetCenter" defaultValue={edit?.budgetCenter ?? ""} className="font-mono" />
+            </FormField>
+          </div>
+          <div className="flex flex-col gap-2 text-sm">
+            <label className="flex items-start gap-2">
+              <input type="checkbox" name="isGroup" defaultChecked={edit?.isGroup ?? false} className="mt-0.5 size-4 accent-[var(--primary)]" />
+              <span>
+                Ştatsız qrup / kollegial orqan
+                <span className="block text-xs text-muted-foreground">Məs. Şura, prorektorlar qrupu — ştat və vakansiya sayılmır</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2">
+              <input type="checkbox" name="isExternal" defaultChecked={edit?.isExternal ?? false} className="mt-0.5 size-4 accent-[var(--primary)]" />
+              <span>
+                Ayrıca hüquqi şəxs
+                <span className="block text-xs text-muted-foreground">Məs. kollec, institut — üst bölmənin cəminə daxil edilmir</span>
+              </span>
+            </label>
+          </div>
           {canMarkSalary && (
             <label className="flex items-start gap-2 text-sm" data-dept-salary-restricted>
               <input type="hidden" name="salaryRestrictedField" value="1" />

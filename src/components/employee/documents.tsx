@@ -17,14 +17,17 @@ import {
   FolderOpenIcon,
   SearchIcon,
   SendIcon,
+  ShieldCheckIcon,
   Trash2Icon,
+  ArchiveIcon,
+  PrinterIcon,
   UploadCloudIcon,
   XIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { deleteDocumentAction, requestDocumentDeletionAction } from "@/actions/documents";
+import { deleteDocumentAction, requestDocumentDeletionAction, verifyDocumentAction } from "@/actions/documents";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -51,6 +54,8 @@ export interface DocumentRow {
   createdAt: string;
   /** Root-un qərarını gözləyən silmə sorğusu */
   pendingDeletion: { by: string | null; reason: string } | null;
+  /** «Yoxlanılıb» — əsli ilə tutuşdurulub (kim, nə vaxt) */
+  verified?: { at: string; by: string | null } | null;
 }
 
 const KINDS = Object.keys(DOCUMENT_KINDS) as DocumentKind[];
@@ -85,7 +90,20 @@ const fileUrl = (id: string, download = false) => `/api/documents/${id}${downloa
 // ----------------------------------------------------------------------------
 
 /** canEdit — yükləmək; canDelete — sorğusuz silmək (yoxdursa zibil qutusu silmə sorğusu göndərir) */
-export function PersonDocuments({ personId, documents, canEdit, canDelete }: { personId: string; documents: DocumentRow[]; canEdit: boolean; canDelete: boolean }) {
+export function PersonDocuments({
+  personId,
+  documents,
+  canEdit,
+  canDelete,
+  canExport = false,
+}: {
+  personId: string;
+  documents: DocumentRow[];
+  canEdit: boolean;
+  canDelete: boolean;
+  /** Şəxsi işin tam çapı və ZIP arxivi (HR / root) */
+  canExport?: boolean;
+}) {
   const [kind, setKind] = useState<DocumentKind | "ALL">("ALL");
   const [query, setQuery] = useState("");
   const [viewing, setViewing] = useState<string | null>(null);
@@ -131,8 +149,25 @@ export function PersonDocuments({ personId, documents, canEdit, canDelete }: { p
             <h3 className="flex items-center gap-2 font-semibold">
               <FolderOpenIcon className="size-4 text-primary" /> Şəxsi iş qovluğu
             </h3>
-            <p className="text-xs text-muted-foreground">Əmrlər, skan edilmiş sənədlər, şəkillər, Word və Excel faylları · {documents.length} sənəd</p>
+            <p className="text-xs text-muted-foreground">
+              Əmrlər, skan edilmiş sənədlər, şəkillər, Word və Excel faylları · {documents.length} sənəd · {documents.filter((d) => d.verified).length} yoxlanılıb
+            </p>
           </div>
+          <div className="flex flex-wrap gap-2">
+          {canExport && (
+            <>
+              <Button variant="outline" asChild>
+                <a href={`/employees/${personId}/file/print`} target="_blank" rel="noreferrer" data-file-print>
+                  <PrinterIcon /> Tam çap
+                </a>
+              </Button>
+              <Button variant="outline" asChild>
+                <a href={`/api/persons/${personId}/file-zip`} data-file-zip>
+                  <ArchiveIcon /> ZIP
+                </a>
+              </Button>
+            </>
+          )}
           {canEdit && (
             <>
               <input
@@ -151,6 +186,7 @@ export function PersonDocuments({ personId, documents, canEdit, canDelete }: { p
               </Button>
             </>
           )}
+          </div>
         </div>
 
         {documents.length > 0 && (
@@ -198,6 +234,15 @@ export function PersonDocuments({ personId, documents, canEdit, canDelete }: { p
                             <ClockIcon className="size-3" /> Silmə sorğusu gözləyir
                           </Badge>
                         )}
+                        {d.verified ? (
+                          <Badge variant="success" className="px-1.5 py-0 text-[10px]" title={`Yoxlanılıb: ${d.verified.by ?? ""} · ${formatDateTime(d.verified.at)}`} data-doc-verified>
+                            <ShieldCheckIcon className="size-3" /> Yoxlanılıb
+                          </Badge>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground" data-doc-unverified>
+                            yoxlanılmayıb
+                          </span>
+                        )}
                         {d.number && <span>№ {d.number}</span>}
                         {d.documentDate && <span className="tabular-nums">{formatIsoDate(d.documentDate)}</span>}
                         <span className="truncate">
@@ -216,6 +261,7 @@ export function PersonDocuments({ personId, documents, canEdit, canDelete }: { p
                         <EyeIcon />
                       </Button>
                     )}
+                    {canEdit && <VerifyButton id={d.id} verified={!!d.verified} title={d.title} />}
                     <Button variant="ghost" size="icon" asChild title="Yüklə">
                       <a href={fileUrl(d.id, true)} aria-label={`Yüklə: ${d.title}`}>
                         <DownloadIcon />
@@ -629,5 +675,31 @@ function DeleteDocumentDialog({ doc, direct, onClose }: { doc: DocumentRow; dire
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** «Yoxlanılıb» işarəsi — sənəd əsli ilə tutuşdurulub (TZ M05-01) */
+function VerifyButton({ id, verified, title }: { id: string; verified: boolean; title: string }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      disabled={pending}
+      title={verified ? "Yoxlanılıb işarəsini götür" : "Əsli ilə yoxlanılıb"}
+      aria-label={`${verified ? "Yoxlanılıb işarəsini götür" : "Yoxlanılıb kimi işarələ"}: ${title}`}
+      className={verified ? "text-success" : "text-muted-foreground"}
+      onClick={() =>
+        start(async () => {
+          const r = await verifyDocumentAction(id, !verified);
+          if (r.error) toast.error(r.error);
+          else router.refresh();
+        })
+      }
+      data-doc-verify={verified ? "on" : "off"}
+    >
+      {pending ? <LoaderIcon className="animate-spin" /> : <ShieldCheckIcon />}
+    </Button>
   );
 }

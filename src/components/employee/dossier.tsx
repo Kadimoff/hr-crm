@@ -8,6 +8,7 @@ import {
   HeartHandshakeIcon,
   HistoryIcon,
   IdCardIcon,
+  ListTreeIcon,
   LockIcon,
   MailIcon,
   MapPinIcon,
@@ -21,6 +22,7 @@ import { PersonDocuments } from "@/components/employee/documents";
 import { FinanceHistoryTab } from "@/components/employee/finance-history";
 import { CancelLeaveButton, LeaveDialog } from "@/components/employee/leave-dialog";
 import { MovementDialog } from "@/components/employee/movement-dialog";
+import { VerifyOpeningButton } from "@/components/employee/verify-opening";
 import { SalaryRestrictionToggle } from "@/components/employee/salary-restriction-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,6 +35,7 @@ import { SALARY_HIDDEN_HINT, SALARY_HIDDEN_LABEL } from "@/lib/salary-privacy";
 import { cn, formatAzn, formatNumber, initials } from "@/lib/utils";
 import { formatAzDate } from "@/lib/validation/primitives";
 import { UNKNOWN_LABEL } from "@/lib/unknown-values";
+import { buildPersonalIndex, INDEX_SECTION_LABELS } from "@/lib/personal-file";
 
 // ----------------------------------------------------------------------------
 //  Köməkçi komponentlər
@@ -183,7 +186,7 @@ const daysBetween = (a: Date, b: Date) => Math.round((b.getTime() - a.getTime())
 //  Dosye
 // ----------------------------------------------------------------------------
 
-const TABS = ["personal", "contract", "finance", "academic", "family", "leave", "attendance", "documents"];
+const TABS = ["personal", "contract", "finance", "academic", "family", "leave", "attendance", "documents", "index"];
 
 /** Kadr hərəkətləri cədvəlinin sətri: köçürmə / vəzifə artımı / maaş / ştat dəyişikliyi və ya ödənişsiz məzuniyyət */
 interface HistoryRow {
@@ -210,7 +213,10 @@ export function EmployeeDossier({
   finance,
   asOf,
   salary = { hidden: false, locked: false, restricted: false, canMark: false, self: false, financeHidden: false },
+  canExport = false,
 }: {
+  /** Şəxsi işin tam çapı və ZIP (employees.edit) */
+  canExport?: boolean;
   data: Dossier;
   canEdit?: boolean;
   canDelete?: boolean;
@@ -398,6 +404,9 @@ export function EmployeeDossier({
           <TabsTrigger value="documents">
             <FolderOpenIcon /> Şəxsi iş
             {p.documents.length > 0 && <span className="rounded-full bg-primary/10 px-1.5 text-[10px] font-semibold text-primary tabular-nums">{p.documents.length}</span>}
+          </TabsTrigger>
+          <TabsTrigger value="index">
+            <ListTreeIcon /> İndeks
           </TabsTrigger>
         </TabsList>
 
@@ -906,6 +915,11 @@ export function EmployeeDossier({
                 <>
                   Müqavilələrin işə qəbul tarixi məlum deyil — staj <b>açılış stajından</b> hesablanır ({seniority.openingNote}).
                   {seniority.openingAcademic && <> Akademik staj: {formatYmd(seniority.openingAcademic)}.</>} Məzuniyyətin staja görə əlavəsi bu dəyərə əsaslanır.
+                  {canEdit && !p.openingSeniorityVerifiedAt && !p.deletedAt && (
+                    <span className="mt-2 block">
+                      <VerifyOpeningButton personId={p.id} />
+                    </span>
+                  )}
                 </>
               ) : (
                 <>İşə qəbul tarixi və açılış stajı məlum deyil — staj hesablanmır. «Məlumat tamlığı» siyahısından doldurun.</>
@@ -967,6 +981,25 @@ export function EmployeeDossier({
           </Section>
         </TabsContent>
 
+        {/* VAHİD XRONOLOJİ İNDEKS (TZ M05-01) */}
+        <TabsContent value="index">
+          <Section title="Şəxsi işin vahid indeksi" description="Şəxsiyyət, təhsil, elmi dərəcə və ad, staj, müqavilələr, əmrlər, məzuniyyətlər, status sənədləri, tanışlıq qeydləri və sənədlər — tarixə görə" icon={ListTreeIcon}>
+            <SimpleTable
+              rows={buildPersonalIndex(p)}
+              columns={[
+                { header: "Tarix", cell: (r) => (r.date ? d(r.date) : <UnknownBadge />), className: "tabular-nums whitespace-nowrap" },
+                { header: "Bölmə", cell: (r) => <Badge variant="outline">{INDEX_SECTION_LABELS[r.section]}</Badge> },
+                { header: "Qeyd", cell: (r) => <span className="font-medium">{r.title}</span> },
+                { header: "Məzmun", cell: (r) => <span className="whitespace-normal">{r.detail}</span> },
+                {
+                  header: "Yoxlanılıb",
+                  cell: (r) => (r.documentId === undefined ? "" : r.verified ? <Badge variant="success">bəli</Badge> : <span className="text-xs text-muted-foreground">xeyr</span>),
+                },
+              ]}
+            />
+          </Section>
+        </TabsContent>
+
         {/* ŞƏXSİ İŞ — sənədlər */}
         <TabsContent value="documents">
           <PersonDocuments
@@ -985,7 +1018,9 @@ export function EmployeeDossier({
               uploadedBy: d.uploadedBy?.fullName ?? null,
               createdAt: d.createdAt.toISOString(),
               pendingDeletion: d.deletionRequests[0] ? { by: d.deletionRequests[0].requestedBy?.fullName ?? null, reason: d.deletionRequests[0].reason } : null,
+              verified: d.verifiedAt ? { at: d.verifiedAt.toISOString(), by: d.verifiedBy?.fullName ?? null } : null,
             }))}
+            canExport={canExport}
           />
         </TabsContent>
       </Tabs>

@@ -68,6 +68,7 @@ export default async function EmployeePage({ params, searchParams }: { params: P
         finance={finance}
         asOf={asOfIso}
         salary={{ hidden: !salary.visible, locked: !salary.editable, restricted: salary.restricted, canMark: salary.privileged && canEdit, self: salary.self, financeHidden }}
+        canExport={canEdit && !p.deletedAt}
       />
       <p className="mt-6 text-xs text-muted-foreground">
         Qeydiyyata alan: {p.createdBy ? `${p.createdBy.fullName} (@${p.createdBy.username})` : "idxal / sistem"} · {formatDateTime(p.createdAt)}

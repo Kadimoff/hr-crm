@@ -136,7 +136,13 @@ export async function createBackup(createdBy: string, reason?: BackupReason): Pr
 
   // Snapshot-dakı sənədlərin faylları — bazanın vəziyyətinə uyğun
   const docs: { rel: string; size: number }[] = [];
-  const referenced = ((tables.PersonDocument ?? []) as { storagePath: string }[]).map((d) => d.storagePath);
+  const referenced = [
+    ...((tables.PersonDocument ?? []) as { storagePath: string }[]).map((d) => d.storagePath),
+    // Əsasnamə və vəzifə təlimatlarının imzalı faylları (DOCUMENTS_DIR/_org/…)
+    ...([...((tables.DepartmentCharter ?? []) as { fileStoragePath: string | null }[]), ...((tables.JobDescription ?? []) as { fileStoragePath: string | null }[])]
+      .map((d) => d.fileStoragePath)
+      .filter((p): p is string => !!p)),
+  ];
   for (const rel of referenced) {
     const s = await stat(path.join(DOCUMENTS_DIR, rel)).catch(() => null);
     if (s?.isFile()) docs.push({ rel, size: s.size });
