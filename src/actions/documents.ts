@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { canDeleteDocumentsDirectly } from "@/lib/auth/roles";
+import { canAccessPerson } from "@/lib/auth/scope";
 import { assertUser, type CurrentUser } from "@/lib/auth/session";
 import { audit } from "@/lib/audit";
 import { DELETE_CONFIRM_WORD, matchesConfirmWord } from "@/lib/confirm";
@@ -163,7 +164,7 @@ export async function verifyOpeningSeniorityAction(personId: string): Promise<Do
   try {
     const user = await assertUser("employees.edit");
     const p = await prisma.person.findFirst({ where: { id: personId, deletedAt: null }, select: { fullName: true, code: true, openingSeniorityYears: true } });
-    if (!p) return { error: "Əməkdaş tapılmadı" };
+    if (!p || !(await canAccessPerson(user, personId))) return { error: "Əməkdaş tapılmadı" };
     if (p.openingSeniorityYears === null) return { error: "Açılış stajı yoxdur" };
     await prisma.$transaction(async (tx) => {
       await tx.person.update({ where: { id: personId }, data: { openingSeniorityVerifiedAt: new Date(), openingSeniorityVerifiedBy: user.username, updatedById: user.id } });
