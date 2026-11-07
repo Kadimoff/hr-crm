@@ -145,12 +145,14 @@ export function computePayroll(input: PayrollInput, cfg: PayrollConfig = DEFAULT
  * bağlanmışı. Məlumatda səhvən iki əsas müqavilə olsa da güzəşt ikiqat sayılmır; şəxsin yalnız əvəzçilik müqaviləsi
  * varsa (əsas iş yeri başqa müəssisədədir) — heç biri.
  */
-export function primaryEmploymentIds(rows: { id: string; personId: string; isPrimary: boolean; hireDate: Date }[]): Set<string> {
-  const best = new Map<string, { id: string; hireDate: Date }>();
+export function primaryEmploymentIds(rows: { id: string; personId: string; isPrimary: boolean; hireDate: Date | null }[]): Set<string> {
+  // İşə qəbul tarixi məlum olmayan (null) müqavilə ən sonda sayılır
+  const t = (d: Date | null) => (d ? d.getTime() : Number.POSITIVE_INFINITY);
+  const best = new Map<string, { id: string; hireDate: Date | null }>();
   for (const r of rows) {
     if (!r.isPrimary) continue;
     const cur = best.get(r.personId);
-    if (!cur || r.hireDate < cur.hireDate || (r.hireDate.getTime() === cur.hireDate.getTime() && r.id < cur.id)) best.set(r.personId, { id: r.id, hireDate: r.hireDate });
+    if (!cur || t(r.hireDate) < t(cur.hireDate) || (t(r.hireDate) === t(cur.hireDate) && r.id < cur.id)) best.set(r.personId, { id: r.id, hireDate: r.hireDate });
   }
   return new Set([...best.values()].map((b) => b.id));
 }

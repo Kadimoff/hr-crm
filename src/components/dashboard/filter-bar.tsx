@@ -63,7 +63,7 @@ export function FilterBar({ rows, departments }: { rows: DashboardRow[]; departm
   // Məlumatdakı illər + qrafikin 10 illik pəncərəsi + seçilmiş il (qrafikdə klik edilən il dropdown-da da görünsün)
   const years = useMemo(() => {
     const thisYear = new Date().getFullYear();
-    const all = new Set([...rows.map((r) => r.hireYear), ...Array.from({ length: 10 }, (_, i) => thisYear - i)]);
+    const all = new Set([...rows.flatMap((r) => (r.hireYear === null ? [] : [r.hireYear])), ...Array.from({ length: 10 }, (_, i) => thisYear - i)]);
     if (Number(filters.year)) all.add(Number(filters.year));
     return [...all].sort((a, b) => b - a).map((y) => ({ value: String(y), label: String(y) }));
   }, [rows, filters.year]);

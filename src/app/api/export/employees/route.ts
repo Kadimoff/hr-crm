@@ -18,9 +18,9 @@ const COLUMNS: Record<string, { header: string; width: number; value: (r: Employ
   department: { header: "Struktur bölmə", width: 30, value: (r) => r.department },
   staffCategory: { header: "Heyət", width: 18, value: (r) => r.staffCategory },
   status: { header: "Status", width: 14, value: (r) => (r.status ? STATUS_LABEL[r.status] : null) },
-  hireDate: { header: "İşə qəbul", width: 12, value: (r) => (r.hireDate ? new Date(r.hireDate) : null) },
+  hireDate: { header: "İşə qəbul", width: 12, value: (r) => (r.hireDate ? new Date(r.hireDate) : r.position ? "Məlum deyil" : null) },
   // Məxfi maaş — rəqəm yox, «Məxfi» (getEmployeeRows onu ümumiyyətlə qaytarmır)
-  baseSalary: { header: "Oklad (AZN)", width: 12, value: (r) => (r.salaryHidden ? SALARY_HIDDEN_LABEL : r.baseSalary) },
+  baseSalary: { header: "Oklad (AZN)", width: 12, value: (r) => (r.salaryHidden ? SALARY_HIDDEN_LABEL : r.salaryUnknown ? "Məlum deyil" : r.baseSalary) },
   degree: { header: "Elmi dərəcə", width: 18, value: (r) => r.degree },
   title: { header: "Elmi ad", width: 12, value: (r) => r.title },
   gender: { header: "Cins", width: 8, value: (r) => (r.gender === "MALE" ? "Kişi" : "Qadın") },

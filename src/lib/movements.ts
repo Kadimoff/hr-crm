@@ -7,6 +7,7 @@ import { logFinanceChanges, moneyValue, pctValue } from "./finance-log";
 import { describeMovement, inferMovementKind, MOVEMENT_KIND_LABELS, movementKindError, type MovementInput } from "./movement-rules";
 import { SALARY_LOCKED_MESSAGE, SALARY_SELF_MESSAGE, SALARY_TRANSFER_MESSAGE, type SalaryViewer } from "./salary-privacy";
 import { restrictedDepartmentIds, salaryAccess } from "./salary-restriction";
+import { ACK_REASON, ensureJobDescriptionAcks } from "./job-description-acks";
 
 const DAY = 86_400_000;
 
@@ -59,14 +60,16 @@ export async function applyMovement(
   if (input.orderDate > today) throw new MovementError("Əmrin tarixi gələcəkdə ola bilməz", "orderDate");
   if (input.effectiveDate > today)
     throw new MovementError("Qüvvəyə minmə tarixi gələcəkdə ola bilməz — əmri qüvvəyə mindiyi gün (və ya sonra) daxil edin", "effectiveDate");
-  if (input.effectiveDate <= emp.hireDate) throw new MovementError(`Qüvvəyə minmə tarixi işə qəbul tarixindən (${formatAzDate(emp.hireDate)}) sonra olmalıdır`, "effectiveDate");
+  // İşə qəbul tarixi məlum deyilsə (miqrasiya) bu yoxlama aparılmır
+  if (emp.hireDate && input.effectiveDate <= emp.hireDate) throw new MovementError(`Qüvvəyə minmə tarixi işə qəbul tarixindən (${formatAzDate(emp.hireDate)}) sonra olmalıdır`, "effectiveDate");
   const last = await tx.employmentMovement.findFirst({ where: { employmentId: emp.id }, orderBy: { effectiveDate: "desc" }, select: { effectiveDate: true } });
   if (last && input.effectiveDate < last.effectiveDate)
     throw new MovementError(`Bu müqavilədə ${formatAzDate(last.effectiveDate)} tarixli daha yeni hərəkət var — tarixçə ardıcıl olmalıdır`, "effectiveDate");
 
   const deptChanged = input.departmentId !== emp.departmentId;
   const posChanged = input.positionId !== emp.positionId;
-  const salaryChanged = Number(emp.baseSalary) !== input.baseSalary;
+  // Oklad məlum deyildisə (null) daxil edilən oklad dəyişiklik sayılır
+  const salaryChanged = emp.baseSalary === null || Number(emp.baseSalary) !== input.baseSalary;
   const shareChanged = Number(emp.unitShare) !== input.unitShare;
   if (!deptChanged && !posChanged && !salaryChanged && !shareChanged) throw new MovementError("Heç bir dəyişiklik yoxdur — yeni bölmə, vəzifə, oklad və ya ştat payını daxil edin");
   const access = await salaryAccess(tx, user, person.id);
@@ -94,7 +97,8 @@ export async function applyMovement(
       throw new MovementError(`Qüvvəyə minmə tarixi cari oklad qeydinin başlanğıcından (${formatAzDate(open.validFrom)}) sonra olmalıdır`, "effectiveDate");
     const prevEnd = new Date(input.effectiveDate.getTime() - DAY);
     // Tarixçəsi olmayan (məs. köhnə idxal) müqavilədə əvvəlki okladın dövrü də yazılır
-    if (history.length === 0) await tx.salaryRecord.create({ data: { employmentId: emp.id, baseSalary: emp.baseSalary, validFrom: emp.hireDate, validTo: prevEnd } });
+    if (history.length === 0 && emp.baseSalary !== null && emp.hireDate)
+      await tx.salaryRecord.create({ data: { employmentId: emp.id, baseSalary: emp.baseSalary, validFrom: emp.hireDate, validTo: prevEnd } });
     else await tx.salaryRecord.updateMany({ where: { employmentId: emp.id, validTo: null }, data: { validTo: prevEnd } });
     await tx.salaryRecord.create({ data: { employmentId: emp.id, baseSalary: input.baseSalary, validFrom: input.effectiveDate } });
   }
@@ -103,6 +107,8 @@ export async function applyMovement(
     where: { id: emp.id },
     data: { departmentId: input.departmentId, positionId: input.positionId, baseSalary: input.baseSalary, unitShare: input.unitShare },
   });
+  // Köçürmə / vəzifə dəyişikliyi: yeni yerin qüvvədə olan vəzifə təlimatı ilə tanışlıq tapşırığı (TZ M03-02)
+  if (deptChanged || posChanged) await ensureJobDescriptionAcks(tx, [emp.id], ACK_REASON.MOVE);
 
   const movement = await tx.employmentMovement.create({
     data: {

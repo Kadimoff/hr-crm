@@ -76,7 +76,15 @@ export function KpiCards({ kpi, filtered = false }: { kpi: Kpis; filtered?: bool
       label: "Aylıq ƏH fondu (brutto)",
       value: formatAzn(kpi.payrollGross),
       // Məxfi maaşlar (server 0 göndərir) heç bir cəmə daxil deyil — qeyd olunur
-      unit: kpi.payrollHiddenContracts > 0 ? `məxfi ${formatNumber(kpi.payrollHiddenContracts)} müq. daxil deyil` : undefined,
+      // Maaşı məlum olmayan (oklad boş — miqrasiya) müqavilələr 0 kimi sayılmır, ayrıca qeyd olunur
+      unit:
+        [
+          kpi.payrollHiddenContracts > 0 ? `məxfi ${formatNumber(kpi.payrollHiddenContracts)} müq.` : null,
+          kpi.payrollUnknownContracts > 0 ? `maaşı məlum olmayan ${formatNumber(kpi.payrollUnknownContracts)} müq.` : null,
+        ]
+          .filter(Boolean)
+          .join(", ")
+          .replace(/(.+)$/, "$1 daxil deyil") || undefined,
       icon: BanknoteIcon,
       tone: "success",
       left: <Stat label="Netto" value={formatAzn(kpi.payrollNet)} />,

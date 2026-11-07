@@ -98,7 +98,7 @@ export function HiresChart({ rows, className }: { rows: DashboardRow[]; classNam
     const start = Math.min(thisYear - 9, filters.year ? Number(filters.year) || thisYear : thisYear);
     const years = Array.from({ length: thisYear - start + 1 }, (_, i) => String(start + i));
     const base = applyFilters(rows, filters, "year");
-    return { empty: base.length === 0, start, thisYear, buckets: bucketize(base, (r) => (r.hireYear >= start ? String(r.hireYear) : null), years) };
+    return { empty: base.length === 0, start, thisYear, buckets: bucketize(base, (r) => (r.hireYear !== null && r.hireYear >= start ? String(r.hireYear) : null), years) };
   }, [rows, filters]);
   // Boş vəziyyət yalnız filtrə uyğun heç kim olmadıqda; pəncərədə qəbul yoxdursa xətt 0-da çəkilir
   const { empty, buckets: data } = chart;

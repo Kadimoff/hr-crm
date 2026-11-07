@@ -14,7 +14,7 @@ import { ORDER_LEAVE_TYPES } from "@/lib/leave-rules";
 import { applyLeave, cancelLeave } from "@/lib/leaves";
 import { MOVEMENT_KINDS } from "@/lib/movement-rules";
 import { applyMovement, MovementError } from "@/lib/movements";
-import { lockedSalaryInput } from "@/lib/salary-privacy";
+import { lockedSalaryInput, SALARY_LOCKED_MESSAGE } from "@/lib/salary-privacy";
 import { finCode, optEmail } from "@/lib/validation/primitives";
 
 export interface PersonFormState {
@@ -55,9 +55,10 @@ const formSchema = z
     citizenship: optStr,
     fin: finCode,
     ssn: optStr,
-    idDocType: reqStr("Sənədin növü"),
+    // Yeni əməkdaşda məcburidir; miqrasiyadan «məlum deyil» gələn qeyddə boş saxlanıla bilər (DAT-02) — bax savePersonAction
+    idDocType: optStr,
     idDocSeries: optStr,
-    idDocNumber: reqStr("Sənədin nömrəsi"),
+    idDocNumber: optStr,
     idDocIssueDate: optDate,
     idDocIssuedBy: optStr,
     mobilePhone: optStr,
@@ -90,9 +91,14 @@ const formSchema = z
     if (v.departmentId || v.positionId || v.hireDate || v.baseSalary !== undefined) {
       if (!v.departmentId) ctx.addIssue({ code: "custom", path: ["departmentId"], message: "Struktur bölməni seçin" });
       if (!v.positionId) ctx.addIssue({ code: "custom", path: ["positionId"], message: "Vəzifəni seçin" });
-      if (!v.hireDate) ctx.addIssue({ code: "custom", path: ["hireDate"], message: "İşə qəbul tarixi boş ola bilməz" });
-      else if (v.hireDate <= v.birthDate) ctx.addIssue({ code: "custom", path: ["hireDate"], message: "İşə qəbul tarixi doğum tarixindən sonra olmalıdır" });
-      if (v.baseSalary === undefined) ctx.addIssue({ code: "custom", path: ["baseSalary"], message: "Okladı daxil edin" });
+      // Yeni müqavilədə tarix və oklad məcburidir; mövcud «məlum deyil» müqavilədə boş qala bilər (silmək olmaz — action yoxlayır)
+      if (!v.hireDate && !v.employmentId) ctx.addIssue({ code: "custom", path: ["hireDate"], message: "İşə qəbul tarixi boş ola bilməz" });
+      else if (v.hireDate && v.hireDate <= v.birthDate) ctx.addIssue({ code: "custom", path: ["hireDate"], message: "İşə qəbul tarixi doğum tarixindən sonra olmalıdır" });
+      if (v.baseSalary === undefined && !v.employmentId) ctx.addIssue({ code: "custom", path: ["baseSalary"], message: "Okladı daxil edin" });
+    }
+    if (!v.id) {
+      if (!v.idDocType) ctx.addIssue({ code: "custom", path: ["idDocType"], message: "Sənədin növü boş ola bilməz" });
+      if (!v.idDocNumber) ctx.addIssue({ code: "custom", path: ["idDocNumber"], message: "Sənədin nömrəsi boş ola bilməz" });
     }
     if (v.status === "TERMINATED" && !v.terminationDate) ctx.addIssue({ code: "custom", path: ["terminationDate"], message: "Azad olunma tarixini daxil edin" });
     if (v.terminationDate && v.hireDate && v.terminationDate < v.hireDate)
@@ -131,9 +137,9 @@ function personData(v: FormValues) {
     citizenship: v.citizenship ?? null,
     fin: v.fin,
     ssn: v.ssn ?? null,
-    idDocType: v.idDocType,
+    idDocType: v.idDocType ?? null,
     idDocSeries: v.idDocSeries ?? null,
-    idDocNumber: v.idDocNumber,
+    idDocNumber: v.idDocNumber ?? null,
     idDocIssueDate: v.idDocIssueDate ?? null,
     idDocIssuedBy: v.idDocIssuedBy ?? null,
     mobilePhone: v.mobilePhone ?? null,
@@ -144,15 +150,21 @@ function personData(v: FormValues) {
   };
 }
 
+/**
+ * Müqavilə sahələri. Yeni müqavilədə qəbul tarixi və oklad məcburidir (sxem yoxlayır), qrafik / ödəniş forması defolt alır.
+ * Mövcud müqavilədə (employmentId) boş sahə «məlum deyil» olaraq qalır — defolt və ya 0 YAZILMIR (DAT-02).
+ */
 function employmentData(v: FormValues) {
-  if (!v.departmentId || !v.positionId || !v.hireDate || v.baseSalary === undefined) return null;
+  if (!v.departmentId || !v.positionId) return null;
+  if (!v.employmentId && (!v.hireDate || v.baseSalary === undefined)) return null;
   const status: EmploymentStatus = v.status ?? "ACTIVE";
+  const fresh = !v.employmentId;
   return {
     departmentId: v.departmentId,
     positionId: v.positionId,
     hireDate: v.hireDate,
-    schedule: v.schedule ?? "5 günlük iş həftəsi",
-    paymentForm: v.paymentForm ?? "Aylıq oklad",
+    schedule: v.schedule ?? (fresh ? "5 günlük iş həftəsi" : undefined),
+    paymentForm: v.paymentForm ?? (fresh ? "Aylıq oklad" : undefined),
     baseSalary: v.baseSalary,
     unitShare: v.unitShare ?? 1,
     status,
@@ -178,6 +190,8 @@ async function applySalaryLock(user: CurrentUser, raw: Record<string, unknown>, 
     if (str(raw.baseSalary) || str(raw.departmentId) || str(raw.positionId)) return "Maaşı məxfi olan əməkdaşa yeni müqaviləni yalnız root və ya səlahiyyətli hesab əlavə edə bilər";
     return null;
   }
+  // Oklad məlum deyil (null): kilidli istifadəçi onu doldura bilmir, boş qalır (0 yazılmır)
+  if (emp.baseSalary === null) return str(raw.baseSalary) ? SALARY_LOCKED_MESSAGE : null;
   const r = lockedSalaryInput(raw.baseSalary, Number(emp.baseSalary));
   if (!r.ok) return r.error;
   raw.baseSalary = String(r.value);
@@ -222,7 +236,7 @@ export async function savePersonAction(_prev: PersonFormState, form: FormData): 
             code,
             ...data,
             createdById: user.id,
-            ...(emp ? { employments: { create: { ...emp, salaryHistory: { create: { baseSalary: emp.baseSalary, validFrom: emp.hireDate } } } } } : {}),
+            ...(emp ? { employments: { create: { ...emp, salaryHistory: { create: { baseSalary: emp.baseSalary!, validFrom: emp.hireDate! } } } } } : {}),
           },
           select: { id: true },
         });
@@ -242,6 +256,15 @@ export async function savePersonAction(_prev: PersonFormState, form: FormData): 
 
       const before = await tx.person.findFirst({ where: { id: v.id, deletedAt: null }, include: { employments: true } });
       if (!before) throw new Error("Əməkdaş tapılmadı və ya arxivdədir");
+      // «Məlum deyil» (null) sahə boş qala bilər, amma məlum dəyər boşaldılmır
+      const erased: [string, string][] = [];
+      if (!v.idDocType && before.idDocType) erased.push(["idDocType", "Sənədin növü boş ola bilməz"]);
+      if (!v.idDocNumber && before.idDocNumber) erased.push(["idDocNumber", "Sənədin nömrəsi boş ola bilməz"]);
+      const cur = v.employmentId ? before.employments.find((e) => e.id === v.employmentId) : undefined;
+      if (cur && !v.hireDate && cur.hireDate) erased.push(["hireDate", "İşə qəbul tarixi boş ola bilməz"]);
+      if (cur && v.baseSalary === undefined && cur.baseSalary !== null) erased.push(["baseSalary", "Okladı daxil edin"]);
+      if (cur && !v.employmentId) erased.push(["hireDate", "Müqavilə tapılmadı"]);
+      if (erased.length) throw new FieldsError("Formada xətalar var — qeyd olunmuş sahələri düzəldin", Object.fromEntries(erased));
       const changes: Record<string, [unknown, unknown]> = diff(
         Object.fromEntries(Object.keys(data).map((k) => [k, before[k as keyof typeof before]])),
         data,
@@ -260,10 +283,16 @@ export async function savePersonAction(_prev: PersonFormState, form: FormData): 
         if (current) {
           // Bölmə / vəzifə / oklad / ştat payı müqavilənin üzərinə səssizcə yazılmır — əmr əsasında kadr hərəkəti kimi
           // (EmploymentMovement + oklad tarixçəsi qüvvəyə minmə tarixi ilə) qeydə alınır və Hərəkət hesabatına düşür
-          const { departmentId, positionId, baseSalary, unitShare, ...rest } = emp;
+          const { departmentId, positionId, baseSalary: givenSalary, unitShare, ...rest } = emp;
+          // Oklad məlum deyil və boş qalıb — dəyişiklik sayılmır
+          const baseSalary = givenSalary ?? (current.baseSalary === null ? undefined : Number(current.baseSalary));
           const jobChanged =
-            current.departmentId !== departmentId || current.positionId !== positionId || Number(current.baseSalary) !== baseSalary || Number(current.unitShare) !== unitShare;
+            current.departmentId !== departmentId ||
+            current.positionId !== positionId ||
+            (baseSalary !== undefined && (current.baseSalary === null || Number(current.baseSalary) !== baseSalary)) ||
+            Number(current.unitShare) !== unitShare;
           if (jobChanged) {
+            if (baseSalary === undefined) throw new FieldsError("Kadr hərəkəti üçün okladı daxil edin", { baseSalary: "Okladı daxil edin" });
             const missing: [string, string][] = [];
             if (!v.orderNumber) missing.push(["orderNumber", "Əmrin nömrəsini daxil edin"]);
             if (!v.orderDate) missing.push(["orderDate", "Əmrin tarixini daxil edin"]);
@@ -290,11 +319,13 @@ export async function savePersonAction(_prev: PersonFormState, form: FormData): 
           for (const [k, pair] of Object.entries(diff(Object.fromEntries(Object.keys(rest).map((k) => [k, current[k as keyof typeof current]])), rest)))
             changes[`employment.${k}`] = pair;
           // Ödəniş forması əmrsiz redaktə olunur — maliyyə tarixçəsinə bu gündən qüvvədə kimi yazılır
-          await logFinanceChanges(tx, { personId: v.id, employmentId: current.id, effectiveDate: todayUtc(), source: "EDIT", userId: user.id }, [
-            { field: "PAYMENT_FORM", oldValue: current.paymentForm, newValue: rest.paymentForm },
-          ]);
+          if (rest.paymentForm !== undefined)
+            await logFinanceChanges(tx, { personId: v.id, employmentId: current.id, effectiveDate: todayUtc(), source: "EDIT", userId: user.id }, [
+              { field: "PAYMENT_FORM", oldValue: current.paymentForm, newValue: rest.paymentForm },
+            ]);
           await tx.employment.update({ where: { id: current.id }, data: rest });
         } else {
+          if (!emp.hireDate || emp.baseSalary === undefined) throw new FieldsError("Yeni müqavilə üçün işə qəbul tarixi və oklad məcburidir", { hireDate: "İşə qəbul tarixi boş ola bilməz" });
           await tx.employment.create({ data: { personId: v.id, ...emp, salaryHistory: { create: { baseSalary: emp.baseSalary, validFrom: emp.hireDate } } } });
           changes.employment = [null, snapshot(emp)];
         }

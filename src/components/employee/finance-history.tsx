@@ -67,6 +67,11 @@ export function FinanceHistoryTab({ data, asOf }: { data: FinanceHistory; asOf?:
           </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          {data.incomplete.length > 0 && (
+            <div className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs" data-finance-incomplete>
+              Tarixə görə bərpaya daxil edilməyən müqavilələr (məlumat tam deyil): {data.incomplete.join("; ")}
+            </div>
+          )}
           <form method="get" className="flex flex-wrap items-end gap-2">
             <input type="hidden" name="tab" value="finance" />
             <label className="flex flex-col gap-1 text-xs text-muted-foreground">

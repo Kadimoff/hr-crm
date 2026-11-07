@@ -140,6 +140,42 @@ export function computeSeniority(
   return { initial: initialN, service: serviceYmd, deductedDays: deducted, total, totalYears: toDays(total) / 360 };
 }
 
+/** İl (kəsr ilə, məs. 12.5) → il/ay/gün (360 günlük il konvensiyası) */
+export const yearsToYmd = (years: number): Ymd => fromDays(Math.max(0, years) * 360);
+
+export interface OpeningSeniority {
+  /** Mənbədən gələn ümumi əmək stajı (il, kəsr ola bilər) */
+  years: number | null;
+  /** Akademik (elmi-pedaqoji) staj (il) */
+  academicYears: number | null;
+  /** Hansı tarixə (miqrasiyanın kəsim tarixi) */
+  asOf: Date | null;
+  /** Mənbə mətni və yoxlanılma */
+  source: string | null;
+  verified: boolean;
+}
+
+export interface OpeningSeniorityResult {
+  total: Ymd;
+  totalYears: number;
+  academic: Ymd | null;
+  /** «mənbə: idxal, yoxlanılmayıb» kimi göstərilən izah */
+  note: string;
+}
+
+/**
+ * Açılış stajı (TZ DAT-02): müqavilələrin işə qəbul tarixi məlum olmayanda staj mənbədən gələn dəyərdən götürülür —
+ * kəsim tarixindən bu günədək (hələ işləyirsə) keçən müddət əlavə olunur. Dəyər yoxdursa — null (staj məlum deyil).
+ */
+export function openingSeniority(o: OpeningSeniority, stillEmployed: boolean, asOf: Date = todayUtc()): OpeningSeniorityResult | null {
+  if (o.years === null || !Number.isFinite(o.years)) return null;
+  const since = stillEmployed && o.asOf && o.asOf < asOf ? diff(new Date(o.asOf.getTime() + DAY_MS), asOf) : ZERO;
+  const total = add(yearsToYmd(o.years), since);
+  const academic = o.academicYears === null || !Number.isFinite(o.academicYears) ? null : add(yearsToYmd(o.academicYears), since);
+  const src = o.source ? `mənbə: ${o.source}` : "mənbə: idxal";
+  return { total, totalYears: toDays(total) / 360, academic, note: `${src}, ${o.verified ? "yoxlanılıb" : "yoxlanılmayıb"}` };
+}
+
 export function formatYmd(v: Ymd): string {
   return `${v.years} il ${v.months} ay ${v.days} gün`;
 }

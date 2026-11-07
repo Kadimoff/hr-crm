@@ -31,7 +31,7 @@ export async function GET(request: Request) {
   [10, 34, 30, 28, 18, 8, 12, 11].forEach((w, i) => (ws.getColumn(i + 1).width = w));
   ws.getColumn(7).numFmt = "dd.mm.yyyy";
   for (const r of rows) {
-    ws.addRow([r.code, r.fullName, r.deptPath[r.deptPath.length - 1]?.name ?? "", r.position, r.category, r.gender, new Date(r.hireDate), r.unitShare]);
+    ws.addRow([r.code, r.fullName, r.deptPath[r.deptPath.length - 1]?.name ?? "", r.position, r.category, r.gender, r.hireDate ? new Date(r.hireDate) : "məlum deyil", r.unitShare]);
   }
   ws.views = [{ state: "frozen", ySplit: 2 }];
   ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: 8 } };

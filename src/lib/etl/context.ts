@@ -4,8 +4,9 @@ import { normalizeKey } from "../validation/primitives";
 import { isDepartmentSheet, type SheetRow } from "../validation/templates";
 import type { RefContext, SheetKey } from "../validation/types";
 
-export const employmentNaturalKey = (personCode: string, positionCode: string, departmentCode: string, hireDate: Date) =>
-  `${personCode}|${positionCode}|${departmentCode}|${formatAzDate(hireDate)}`;
+/** hireDate null — «məlum deyil» (bu halda açar «?» ilə qurulur: eyni şəxs + vəzifə + bölmə bir təyinat sayılır) */
+export const employmentNaturalKey = (personCode: string, positionCode: string, departmentCode: string, hireDate: Date | null | undefined) =>
+  `${personCode}|${positionCode}|${departmentCode}|${hireDate ? formatAzDate(hireDate) : "?"}`;
 
 /** DB-dəki mövcud qeydlərdən istinad kontekstini qurur */
 export async function loadContext(db: PrismaClient): Promise<RefContext & { dbEmploymentShares: Map<string, { key: string; share: number }> }> {
@@ -109,9 +110,9 @@ export function registerValid(ctx: RefContext, sheet: SheetKey, row: unknown): v
     case "employments": {
       const r = row as SheetRow<"employments">;
       const list = (ctx.employments.get(r.personCode) ?? []).filter(
-        (e) => !(e.positionCode === r.positionCode && e.departmentCode === r.departmentCode && e.hireDate.getTime() === r.hireDate.getTime()),
+        (e) => !(e.positionCode === r.positionCode && e.departmentCode === r.departmentCode && (e.hireDate?.getTime() ?? null) === (r.hireDate?.getTime() ?? null)),
       );
-      list.push({ positionCode: r.positionCode, departmentCode: r.departmentCode, hireDate: r.hireDate, active: true, unitShare: r.unitShare ?? 1 });
+      list.push({ positionCode: r.positionCode, departmentCode: r.departmentCode, hireDate: r.hireDate ?? null, active: true, unitShare: r.unitShare ?? 1 });
       ctx.employments.set(r.personCode, list);
       break;
     }

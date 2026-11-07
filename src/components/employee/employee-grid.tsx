@@ -132,6 +132,12 @@ const columns: ColumnDef<EmployeeRow>[] = [
             <LockIcon className="size-3" /> {SALARY_HIDDEN_LABEL}
           </Badge>
         );
+      if (row.original.salaryUnknown)
+        return (
+          <Badge variant="warning" className="whitespace-nowrap font-normal" title="Oklad mənbədə yoxdur — «Məlumat tamlığı»" data-unknown>
+            Məlum deyil
+          </Badge>
+        );
       return v === null ? <Empty /> : <span className="whitespace-nowrap tabular-nums">{formatAzn(v)}</span>;
     },
   },

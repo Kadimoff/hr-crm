@@ -113,7 +113,7 @@ export interface RefContext {
   finOwners: Map<string, string>;
   ssnOwners: Map<string, string>;
   /** personCode → müqavilələr */
-  employments: Map<string, { positionCode: string; departmentCode: string; hireDate: Date; active: boolean; unitShare: number }[]>;
+  employments: Map<string, { positionCode: string; departmentCode: string; hireDate: Date | null; active: boolean; unitShare: number }[]>;
   /** `${dept}|${pos}` → ən son dövrün ştat vahidi və maaş diapazonu */
   staffing: Map<string, { unitCount: number; minSalary: number; maxSalary: number; periodDate: Date }>;
   /** Eyni batch-da mövcud, lakin xətalı olan açarlar: `${sheet}:${code}` → sətir nömrəsi */

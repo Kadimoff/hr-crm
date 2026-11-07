@@ -419,9 +419,9 @@ model Person {
   birthCity     String?
 
   // Şəxsiyyəti təsdiq edən sənəd
-  idDocType      String // Şəxsiyyət vəsiqəsi, pasport, ...
+  idDocType      String? // Şəxsiyyət vəsiqəsi, pasport, ...; null — məlum deyil (miqrasiya)
   idDocSeries    String?
-  idDocNumber    String
+  idDocNumber    String?
   idDocIssueDate DateTime? @db.Date
   idDocIssuedBy  String?
   fin            String    @unique @db.Char(7) // FİN kod — 7 simvol
@@ -442,6 +442,18 @@ model Person {
   insuranceSeniorityYears              Int @default(0)
   insuranceSeniorityMonths             Int @default(0)
   insuranceSeniorityDays               Int @default(0)
+
+  /// Açılış stajı (TZ DAT-02 / MIG-04): mənbədən gələn «Ümumi iş stajı / Akademik iş stajı (il)» — işə qəbul tarixi
+  /// məlum olmayanda staj bundan hesablanır və «mənbə: idxal, yoxlanılmayıb» göstərilir. null — verilməyib
+  openingSeniorityYears         Decimal?  @db.Decimal(5, 2)
+  openingAcademicSeniorityYears Decimal?  @db.Decimal(5, 2)
+  /// Açılış stajının hansı tarixə olduğu (miqrasiyanın kəsim tarixi)
+  openingSeniorityAsOf          DateTime? @db.Date
+  /// Mənbə, məs. «İdxal: işçi siyahısı 28.09.2026»
+  openingSenioritySource        String?
+  /// HR sənədlə tutuşdurub — kim / nə vaxt; null — yoxlanılmayıb
+  openingSeniorityVerifiedAt    DateTime?
+  openingSeniorityVerifiedBy    String?
 
   // Vergi güzəşti (Vergi Məcəlləsi 102-ci maddə bəndi, məs. "102.2.1")
   taxExemptionClause String?
@@ -522,10 +534,12 @@ model Employment {
   position     Position         @relation(fields: [positionId], references: [id], onDelete: Restrict)
   departmentId String
   department   Department       @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  hireDate     DateTime         @db.Date
-  schedule     String // iş rejimi / iş qrafiki
-  paymentForm  String // ödəniş forması (şablondakı mətn)
-  baseSalary   Decimal          @db.Decimal(12, 2) // oklad
+  /// İşə qəbul tarixi; null — «məlum deyil» (TZ DAT-02: miqrasiyada mənbədə yoxdur, uydurulmur). UI formalarında məcburidir
+  hireDate     DateTime?        @db.Date
+  schedule     String? // iş rejimi / iş qrafiki; null — məlum deyil
+  paymentForm  String? // ödəniş forması (şablondakı mətn); null — məlum deyil
+  /// Oklad; null — maaş məlum deyil (0 kimi sayılmır, ƏH fondunda ayrıca göstərilir)
+  baseSalary   Decimal?         @db.Decimal(12, 2)
   unitShare    Decimal          @default(1) @db.Decimal(4, 2) // tutduğu ştat vahidi
   isPrimary    Boolean          @default(true) // əsas iş yeri / əvəzçilik
   status       EmploymentStatus @default(ACTIVE)

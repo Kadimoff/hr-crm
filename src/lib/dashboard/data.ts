@@ -64,8 +64,10 @@ export async function getDashboardDataset(scope: string[] | null, hidden: Readon
   const rows: DashboardRow[] = employments.map((e) => {
     const degrees = e.person.academicDegrees.map((d) => d.degree);
     const salaryHidden = hidden.has(e.personId);
+    // Oklad məlum deyil (null) — hesablama aparılmır, 0 kimi sayılmır (KPI-da ayrıca qeyd)
+    const salaryUnknown = e.baseSalary === null;
     const payroll = computePayroll({
-      baseSalary: Number(e.baseSalary),
+      baseSalary: Number(e.baseSalary ?? 0),
       degrees,
       titles: e.person.academicTitles.map((t) => t.title),
       hazardousAllowancePct: e.position.hazardousAllowancePct === null ? null : Number(e.position.hazardousAllowancePct),
@@ -83,13 +85,14 @@ export async function getDashboardDataset(scope: string[] | null, hidden: Readon
       position: e.position.name,
       degree: degrees.includes("DSC") ? "Elmlər doktoru" : degrees.includes("PHD") ? "Fəlsəfə doktoru" : "Elmi dərəcəsiz",
       deptPath: pathOf(e.departmentId),
-      hireDate: e.hireDate.toISOString(),
-      hireYear: e.hireDate.getUTCFullYear(),
+      hireDate: e.hireDate?.toISOString() ?? null,
+      hireYear: e.hireDate?.getUTCFullYear() ?? null,
       unitShare: Number(e.unitShare),
-      gross: salaryHidden ? 0 : payroll.gross,
-      net: salaryHidden ? 0 : payroll.net,
-      employerCost: salaryHidden ? 0 : payroll.employerCost,
+      gross: salaryHidden || salaryUnknown ? 0 : payroll.gross,
+      net: salaryHidden || salaryUnknown ? 0 : payroll.net,
+      employerCost: salaryHidden || salaryUnknown ? 0 : payroll.employerCost,
       salaryHidden,
+      ...(salaryUnknown && !salaryHidden ? { salaryUnknown: true } : {}),
       onLeave: e.status === "ON_LEAVE" || absent.has(e.personId),
     };
   });

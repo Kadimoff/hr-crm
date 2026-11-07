@@ -32,12 +32,22 @@ import { STAFF_CATEGORY_LABELS, type Dossier, type FinanceHistory, type PersonFo
 import { SALARY_HIDDEN_HINT, SALARY_HIDDEN_LABEL } from "@/lib/salary-privacy";
 import { cn, formatAzn, formatNumber, initials } from "@/lib/utils";
 import { formatAzDate } from "@/lib/validation/primitives";
+import { UNKNOWN_LABEL } from "@/lib/unknown-values";
 
 // ----------------------------------------------------------------------------
 //  Köməkçi komponentlər
 // ----------------------------------------------------------------------------
 
 const d = (v: Date | null | undefined) => (v ? formatAzDate(v) : "—");
+
+/** «Məlum deyil» (DAT-02): miqrasiyada mənbədə olmayan sahə — boş «—»-dan fərqli göstərilir */
+export function UnknownBadge({ title }: { title?: string }) {
+  return (
+    <Badge variant="warning" className="font-normal" title={title ?? "Mənbədə yoxdur — «Məlumat tamlığı» siyahısından doldurun"} data-unknown>
+      {UNKNOWN_LABEL}
+    </Badge>
+  );
+}
 const n = (v: unknown) => Number(v);
 
 /** Maaşın yerinə «Məxfi» nişanı (rəqəm serverdən heç gəlmir) */
@@ -217,7 +227,8 @@ export function EmployeeDossier({
    */
   salary?: { hidden: boolean; locked: boolean; restricted: boolean; canMark: boolean; self: boolean; financeHidden: boolean };
 }) {
-  const { person: p, main, seniority, leave, payroll, carryover, unpaidLeave } = data;
+  const { person: p, main, seniority, leave, leaveUnknown, payroll, carryover, unpaidLeave } = data;
+  const seniorityTitle = seniority.basis === "opening" ? `Açılış stajı — ${seniority.openingNote}` : undefined;
   const status = main ? STATUS[main.status] : null;
   const activeEmployments = p.employments.filter((e) => e.status !== "TERMINATED");
   const movements: HistoryRow[] = [
@@ -347,8 +358,13 @@ export function EmployeeDossier({
             </div>
           </div>
           <div className="grid grid-cols-1 gap-1.5 sm:w-[460px] sm:shrink-0 sm:grid-cols-3 sm:gap-2" data-header-stats>
-            <Stat compact label="Ümumi staj" value={`${seniority.total.years} il`} tone="primary" />
-            <Stat compact label="Məzuniyyət hüququ" value={leave ? `${leave.total} gün` : "—"} tone="success" />
+            <Stat
+              compact
+              label="Ümumi staj"
+              value={seniority.basis === "unknown" ? <UnknownBadge /> : <span title={seniorityTitle}>{`${seniority.total.years} il${seniority.basis === "opening" ? "*" : ""}`}</span>}
+              tone="primary"
+            />
+            <Stat compact label="Məzuniyyət hüququ" value={leave ? `${leave.total} gün` : leaveUnknown ? <UnknownBadge title="İşə qəbul tarixi məlum deyil — iş ili təyin olunmur" /> : "—"} tone="success" />
             <Stat compact label="Netto maaş" value={salary.hidden ? <SalaryHiddenBadge /> : payroll ? formatAzn(payroll.net) : "—"} />
           </div>
         </CardContent>
@@ -402,8 +418,8 @@ export function EmployeeDossier({
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Section title="Şəxsiyyəti təsdiq edən sənəd" icon={IdCardIcon}>
               <dl className="grid grid-cols-2 gap-x-6 gap-y-4">
-                <Field label="Sənəd" value={p.idDocType} />
-                <Field label="Seriya / nömrə" value={`${p.idDocSeries ?? ""} ${p.idDocNumber}`.trim()} mono />
+                <Field label="Sənəd" value={p.idDocType ?? <UnknownBadge />} />
+                <Field label="Seriya / nömrə" value={p.idDocNumber ? `${p.idDocSeries ?? ""} ${p.idDocNumber}`.trim() : <UnknownBadge />} mono />
                 <Field label="Verilmə tarixi" value={d(p.idDocIssueDate)} />
                 <Field label="Verən orqan" value={p.idDocIssuedBy} />
                 <Field label="FİN kod" value={p.fin} mono />
@@ -534,10 +550,26 @@ export function EmployeeDossier({
                 { header: "Vəzifə", cell: (r) => <span className="font-medium">{r.position.name}</span> },
                 { header: "Bölmə", cell: (r) => r.department.name },
                 { header: "Heyət", cell: (r) => STAFF_CATEGORY_LABELS[r.position.staffCategory] },
-                { header: "Ödəniş forması", cell: (r) => r.paymentForm },
-                { header: "Qəbul", cell: (r) => d(r.hireDate), className: "tabular-nums" },
+                { header: "Ödəniş forması", cell: (r) => r.paymentForm ?? <UnknownBadge /> },
+                { header: "Qəbul", cell: (r) => (r.hireDate ? d(r.hireDate) : <UnknownBadge />), className: "tabular-nums" },
+                {
+                  header: "Müqavilə",
+                  cell: (r) =>
+                    r.contractType ? (
+                      <span className="whitespace-nowrap" data-contract-type>
+                        {r.contractType === "MUDDETLI" ? "Müddətli" : "Müddətsiz"}
+                        {r.contractEndDate && <span className="block text-[11px] text-muted-foreground">bitir {d(r.contractEndDate)}</span>}
+                      </span>
+                    ) : (
+                      "—"
+                    ),
+                },
                 { header: "Ştat", cell: (r) => n(r.unitShare).toFixed(2), className: "tabular-nums" },
-                { header: "Oklad", cell: (r) => (r.baseSalary === null ? <SalaryHiddenBadge /> : formatAzn(n(r.baseSalary))), className: "tabular-nums text-right" },
+                {
+                  header: "Oklad",
+                  cell: (r) => (r.salaryUnknown ? <UnknownBadge /> : r.baseSalary === null ? <SalaryHiddenBadge /> : formatAzn(n(r.baseSalary))),
+                  className: "tabular-nums text-right",
+                },
                 {
                   header: "Status",
                   cell: (r) => (
@@ -571,7 +603,7 @@ export function EmployeeDossier({
           )}
           {payroll && main && (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              <Section title="Hesablama" description={`${main.position.name} · ${main.schedule}`} className="lg:col-span-2">
+              <Section title="Hesablama" description={`${main.position.name} · ${main.schedule ?? `iş qrafiki ${UNKNOWN_LABEL.toLocaleLowerCase("az")}`}`} className="lg:col-span-2">
                 <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                   <PayrollList title="Hesablanıb" lines={payroll.earnings} total={payroll.gross} totalLabel="Brutto" />
                   <PayrollList title="Tutulmalar" lines={payroll.deductions} total={payroll.totalDeductions} totalLabel="Cəmi tutulma" negative />
@@ -832,9 +864,9 @@ export function EmployeeDossier({
         {/* MƏZUNİYYƏT */}
         <TabsContent value="leave" className="flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Stat label="Cari iş ili üzrə hüquq" value={leave ? `${leave.total} gün` : "—"} tone="success" />
+            <Stat label="Cari iş ili üzrə hüquq" value={leave ? `${leave.total} gün` : leaveUnknown ? <UnknownBadge title="İşə qəbul tarixi məlum deyil" /> : "—"} tone="success" />
             <Stat label="01.04.2025 qalıqları" value={`${carryover.toFixed(1)} gün`} tone="warning" />
-            <Stat label="Ümumi əmək stajı" value={formatYmd(seniority.total)} tone="primary" />
+            <Stat label="Ümumi əmək stajı" value={seniority.basis === "unknown" ? <UnknownBadge /> : formatYmd(seniority.total)} tone="primary" />
             <Stat label="Stajdan çıxılan" value={`${seniority.deductedDays} gün`} tone={seniority.deductedDays ? "danger" : undefined} />
           </div>
           {leave && (
@@ -867,6 +899,18 @@ export function EmployeeDossier({
                 </div>
               </div>
             </Section>
+          )}
+          {seniority.basis !== "records" && (
+            <div className="rounded-lg border border-warning/40 bg-warning-soft px-4 py-3 text-sm" data-seniority-basis={seniority.basis}>
+              {seniority.basis === "opening" ? (
+                <>
+                  Müqavilələrin işə qəbul tarixi məlum deyil — staj <b>açılış stajından</b> hesablanır ({seniority.openingNote}).
+                  {seniority.openingAcademic && <> Akademik staj: {formatYmd(seniority.openingAcademic)}.</>} Məzuniyyətin staja görə əlavəsi bu dəyərə əsaslanır.
+                </>
+              ) : (
+                <>İşə qəbul tarixi və açılış stajı məlum deyil — staj hesablanmır. «Məlumat tamlığı» siyahısından doldurun.</>
+              )}
+            </div>
           )}
           <Section title="Staj tərkibi">
             <Fields>

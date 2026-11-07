@@ -6,6 +6,7 @@ import { ORDER_LEAVE_LABELS, leaveDays, type OrderLeaveType } from "./leave-rule
 import { describeMovement, isReportEventKind, movementKindOf, REPORT_EVENT_LABELS, type ReportEventKind } from "./movement-rules";
 import { STAFF_CATEGORY_LABELS } from "./queries";
 import { maskMovementSalary, SALARY_EXCLUDED_NOTE, SALARY_HIDDEN_LABEL } from "./salary-privacy";
+import { SALARY_UNKNOWN_NOTE, UNKNOWN_LABEL } from "./unknown-values";
 import { formatAzDate } from "./validation/primitives";
 
 export type Cell = string | number | null;
@@ -91,7 +92,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 /** primary — güzəşt və əlavələrin tətbiq olunduğu müqavilələr ({@link primaryEmploymentIds}) */
 function payrollOf(e: Emp, primary: Set<string>) {
   return computePayroll({
-    baseSalary: Number(e.baseSalary),
+    baseSalary: Number(e.baseSalary ?? 0),
     degrees: e.person.academicDegrees.map((d) => d.degree),
     titles: e.person.academicTitles.map((t) => t.title),
     hazardousAllowancePct: e.position.hazardousAllowancePct === null ? null : Number(e.position.hazardousAllowancePct),
@@ -151,7 +152,9 @@ export const REPORTS: ReportDef[] = [
       // ümumi cəmdən bölmələri çıxmaqla fərdi maaş hesablana bilməsin
       const primary = primaryEmploymentIds(list);
       const excluded = list.filter((e) => hidden.has(e.personId)).length;
-      const groups = groupByDepartment(list.filter((e) => !hidden.has(e.personId)));
+      // Oklad məlum deyil (null — miqrasiya): 0 kimi sayılmır, cəmlərə daxil edilmir, qeyddə ayrıca göstərilir
+      const unknown = list.filter((e) => !hidden.has(e.personId) && e.baseSalary === null).length;
+      const groups = groupByDepartment(list.filter((e) => !hidden.has(e.personId) && e.baseSalary !== null));
       const rows = groups.map((g) => {
         const p = g.items.map((e) => payrollOf(e, primary));
         return {
@@ -178,7 +181,8 @@ export const REPORTS: ReportDef[] = [
         totals,
         note:
           "Brutto/netto əlavələr, vergi və sosial ayırmalar sistemdəki əməkhaqqı qaydaları ilə hesablanır — təxmini göstəricidir. Vergi güzəştləri və elmi dərəcə/ad əlavələri şəxsə bir dəfə (əsas iş yerində, ştat payına mütənasib) tətbiq olunur; əvəzçilikdə yalnız oklad." +
-          (excluded ? ` ${SALARY_EXCLUDED_NOTE}: ${excluded} müqavilə hesabata (say daxil) əlavə edilməyib.` : ""),
+          (excluded ? ` ${SALARY_EXCLUDED_NOTE}: ${excluded} müqavilə hesabata (say daxil) əlavə edilməyib.` : "") +
+          (unknown ? ` ${SALARY_UNKNOWN_NOTE}: ${unknown} müqavilə (oklad boşdur) cəmlərə daxil edilməyib.` : ""),
       };
     },
   },
@@ -197,13 +201,15 @@ export const REPORTS: ReportDef[] = [
         department: e.department.name,
         position: e.position.name,
         category: STAFF_CATEGORY_LABELS[e.position.staffCategory],
-        hireDate: formatAzDate(e.hireDate),
+        hireDate: e.hireDate ? formatAzDate(e.hireDate) : UNKNOWN_LABEL,
         unitShare: Number(e.unitShare),
-        // Məxfi maaş: rəqəm yox, «Məxfi» (cəmə daxil edilmir)
-        salary: hidden.has(e.personId) ? SALARY_HIDDEN_LABEL : Number(e.baseSalary),
+        // Məxfi maaş: rəqəm yox, «Məxfi»; məlum deyil — «Məlum deyil» (hər ikisi cəmə daxil edilmir)
+        salary: hidden.has(e.personId) ? SALARY_HIDDEN_LABEL : e.baseSalary === null ? UNKNOWN_LABEL : Number(e.baseSalary),
         status: STATUS[e.status],
       }));
       const excluded = list.filter((e) => hidden.has(e.personId)).length;
+      const unknown = list.filter((e) => !hidden.has(e.personId) && e.baseSalary === null).length;
+      const notes = [excluded ? `${SALARY_EXCLUDED_NOTE} (${excluded} müqavilə)` : "", unknown ? `${SALARY_UNKNOWN_NOTE}: ${unknown} müqavilə cəmə daxil deyil` : ""].filter(Boolean);
       return {
         columns: [
           { key: "n", header: "№", type: "number", width: 6 },
@@ -219,7 +225,7 @@ export const REPORTS: ReportDef[] = [
         ],
         rows,
         totals: { name: `Cəmi: ${rows.length}`, salary: round2(sum(rows, "salary")), unitShare: round2(sum(rows, "unitShare")) },
-        ...(excluded ? { note: `${SALARY_EXCLUDED_NOTE} (${excluded} müqavilə)` } : {}),
+        ...(notes.length ? { note: notes.join(". ") } : {}),
       };
     },
   },
@@ -269,7 +275,7 @@ export const REPORTS: ReportDef[] = [
       ]);
       type Event = { date: Date; code_: ReportEventKind; kind: string; name: string; code: string; department: string; position: string; details: string; order: string };
       const events: Event[] = list.flatMap((e) => [
-        ...(e.hireDate >= from && e.hireDate <= to
+        ...(e.hireDate && e.hireDate >= from && e.hireDate <= to
           ? [{ date: e.hireDate, code_: "HIRE" as const, kind: "İşə qəbul", name: e.person.fullName, code: e.person.code, department: e.department.name, position: e.position.name, details: "", order: "" }]
           : []),
         ...(e.terminationDate && e.terminationDate >= from && e.terminationDate <= to

@@ -99,9 +99,9 @@ export default async function PrintPersonPage({ params }: { params: Promise<{ id
               e.department.name,
               e.position.name,
               STAFF_CATEGORY_LABELS[e.position.staffCategory],
-              d(e.hireDate),
+              e.hireDate ? d(e.hireDate) : "Məlum deyil",
               Number(e.unitShare).toLocaleString("en-US"),
-              e.baseSalary === null ? SALARY_HIDDEN_LABEL : formatAzn(Number(e.baseSalary)),
+              e.salaryUnknown ? "Məlum deyil" : e.baseSalary === null ? SALARY_HIDDEN_LABEL : formatAzn(Number(e.baseSalary)),
               e.status === "TERMINATED" ? `Azad olunub ${d(e.terminationDate)}` : STATUS[e.status],
             ])}
           />

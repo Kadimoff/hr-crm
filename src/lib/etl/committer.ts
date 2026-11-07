@@ -20,6 +20,7 @@ import { logFinanceChanges, moneyValue, pctValue, todayUtc } from "../finance-lo
 import { isSalaryPrivileged, type SalaryViewer } from "../salary-privacy";
 import { lockedSalaryIds, restrictedDepartmentIds } from "../salary-restriction";
 import { emit } from "./progress";
+import { formatAzDate } from "../validation/primitives";
 import { changeFields, closeBlockers, syncKindFlags } from "../org-structure";
 import { closeImpact, recomputeLevels } from "../department-changes";
 import { ACK_REASON, ensureJobDescriptionAcks } from "../job-description-acks";
@@ -235,6 +236,10 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups, guard: SalaryGua
         fullName: [r.lastName, r.firstName, r.patronymic].filter(Boolean).join(" "),
         maritalStatus: r.maritalStatus ?? null,
         quotaBasicLeaveDays: r.quotaBasicLeaveDays ?? null,
+        // Açılış stajı (DAT-02): mənbə «idxal», yoxlanılmayıb — HR sənədlə tutuşdurub təsdiqləyir
+        ...(r.openingSeniorityYears !== undefined || r.openingAcademicSeniorityYears !== undefined
+          ? { openingSenioritySource: `idxal ${formatAzDate(todayUtc())}`, openingSeniorityVerifiedAt: null, openingSeniorityVerifiedBy: null }
+          : {}),
       };
       const before = await tx.person.findUnique({ where: { code }, select: { id: true, taxExemptionClause: true } });
       const p = await tx.person.upsert({
@@ -256,11 +261,27 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups, guard: SalaryGua
       const personId = need(lk.persons, r.personCode, "Əməkdaş");
       const positionId = need(lk.positions, r.positionCode, "Vəzifə");
       const departmentId = need(lk.departments, r.departmentCode, "Bölmə");
-      const where = { personId_positionId_departmentId_hireDate: { personId, positionId, departmentId, hireDate: r.hireDate } };
-      const existing = await tx.employment.findUnique({ where, select: { id: true, baseSalary: true, unitShare: true, paymentForm: true } });
+      // İşə qəbul tarixi məlum deyil (DAT-02): eyni şəxs + vəzifə + bölmə üzrə mövcud (aktiv) müqavilə həmin təyinat sayılır
+      const existing = r.hireDate
+        ? await tx.employment.findUnique({
+            where: { personId_positionId_departmentId_hireDate: { personId, positionId, departmentId, hireDate: r.hireDate } },
+            select: { id: true, baseSalary: true, unitShare: true, paymentForm: true },
+          })
+        : await tx.employment.findFirst({
+            where: { personId, positionId, departmentId, status: { not: "TERMINATED" } },
+            orderBy: { hireDate: { sort: "asc", nulls: "first" } },
+            select: { id: true, baseSalary: true, unitShare: true, paymentForm: true },
+          });
       // Maaş məxfiliyi: imtiyazsız istifadəçi məxfi şəxsin okladını idxalla dəyişə bilməz
       const salaryLocked = guard.locked.has(personId);
-      const data = { schedule: r.schedule, paymentForm: r.paymentForm, unitShare: r.unitShare ?? 1, ...(salaryLocked ? {} : { baseSalary: r.baseSalary }) };
+      // Boş xana mövcud dəyəri silmir (yeni müqavilədə null — «məlum deyil»)
+      const salaryGiven = r.baseSalary !== undefined;
+      const data = {
+        ...(r.schedule !== undefined ? { schedule: r.schedule } : {}),
+        ...(r.paymentForm !== undefined ? { paymentForm: r.paymentForm } : {}),
+        unitShare: r.unitShare ?? 1,
+        ...(salaryLocked || !salaryGiven ? {} : { baseSalary: r.baseSalary }),
+      };
       // Müqavilənin növü / bitmə tarixi — könüllü sütunlar: faylda yoxdursa toxunulmur
       const contract = {
         ...(Object.hasOwn(row.data, "contractType") ? { contractType: r.contractType ?? null } : {}),
@@ -272,7 +293,17 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups, guard: SalaryGua
           throw new CommitError(SALARY_BLOCKED_MESSAGE);
         }
         const created = await tx.employment.create({
-          data: { personId, positionId, departmentId, hireDate: r.hireDate, ...data, ...contract, baseSalary: r.baseSalary, salaryHistory: { create: { baseSalary: r.baseSalary, validFrom: r.hireDate } } },
+          data: {
+            personId,
+            positionId,
+            departmentId,
+            hireDate: r.hireDate ?? null,
+            ...data,
+            ...contract,
+            baseSalary: r.baseSalary ?? null,
+            // Oklad dövrü yalnız oklad və başlanğıc tarixi məlum olanda
+            ...(r.baseSalary !== undefined && r.hireDate ? { salaryHistory: { create: { baseSalary: r.baseSalary, validFrom: r.hireDate } } } : {}),
+          },
           select: { id: true },
         });
         // Qüvvədə olan vəzifə təlimatı ilə tanışlıq tapşırığı (M03-02)
@@ -283,15 +314,15 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups, guard: SalaryGua
       const today = todayUtc();
       // Maliyyə tarixçəsi: idxal ilə dəyişən oklad / ştat payı / ödəniş forması — idxal günündən qüvvədə
       await logFinanceChanges(tx, { personId, employmentId: existing.id, effectiveDate: today, source: "IMPORT", userId: lk.userId }, [
-        ...(salaryLocked ? [] : [{ field: "BASE_SALARY" as const, oldValue: moneyValue(existing.baseSalary), newValue: moneyValue(r.baseSalary) }]),
+        ...(salaryLocked || !salaryGiven ? [] : [{ field: "BASE_SALARY" as const, oldValue: moneyValue(existing.baseSalary), newValue: moneyValue(r.baseSalary!) }]),
         { field: "UNIT_SHARE", oldValue: moneyValue(existing.unitShare), newValue: moneyValue(data.unitShare) },
-        { field: "PAYMENT_FORM", oldValue: existing.paymentForm, newValue: data.paymentForm },
+        ...(data.paymentForm !== undefined ? [{ field: "PAYMENT_FORM" as const, oldValue: existing.paymentForm, newValue: data.paymentForm }] : []),
       ]);
       // Kilidli okladın atlandığı HƏR sətirdə izah (bərabər olub-olmamasından asılı olmayaraq — cavab maaşı açmasın)
       if (salaryLocked) guard.skipped.push(row.id);
-      else if (Number(existing.baseSalary) !== r.baseSalary) {
+      else if (salaryGiven && (existing.baseSalary === null || Number(existing.baseSalary) !== r.baseSalary)) {
         await tx.salaryRecord.updateMany({ where: { employmentId: existing.id, validTo: null }, data: { validTo: new Date(today.getTime() - 86_400_000) } });
-        await tx.salaryRecord.create({ data: { employmentId: existing.id, baseSalary: r.baseSalary, validFrom: today } });
+        await tx.salaryRecord.create({ data: { employmentId: existing.id, baseSalary: r.baseSalary!, validFrom: today } });
       }
       return;
     }
@@ -593,8 +624,8 @@ export async function commitBatch(
         }
         // Əməkdaşın ilk qəbul tarixi (ailə üzvlərinin qeydiyyat tarixi qaydası üçün)
         const hireDates = new Map<string, Date>();
-        const emps = await db.employment.findMany({ select: { hireDate: true, person: { select: { code: true } } }, orderBy: { hireDate: "asc" } });
-        for (const e of emps) if (!hireDates.has(e.person.code)) hireDates.set(e.person.code, e.hireDate);
+        const emps = await db.employment.findMany({ where: { hireDate: { not: null } }, select: { hireDate: true, person: { select: { code: true } } }, orderBy: { hireDate: "asc" } });
+        for (const e of emps) if (e.hireDate && !hireDates.has(e.person.code)) hireDates.set(e.person.code, e.hireDate);
 
         for (const [personCode, group] of groups) {
           // Qrup tam etibarlı olmalıdır; etibarlı sətirlər gözləyir — izah commit-dən sonrakı yoxlamadan sonra yazılır (annotateWaitingRows)

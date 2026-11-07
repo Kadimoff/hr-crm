@@ -1574,10 +1574,14 @@ function StaffPanel({ staff: s, dept, options, canEdit, onClose }: { staff: OrgS
             <dt className="text-muted-foreground">Bölmə</dt>
             <dd>{dept?.name ?? "—"}</dd>
             <dt className="text-muted-foreground">İşə qəbul</dt>
-            <dd className="tabular-nums">{formatIsoDate(s.hireDate)}</dd>
+            <dd className="tabular-nums">{s.hireDate ? formatIsoDate(s.hireDate) : <Badge variant="warning">Məlum deyil</Badge>}</dd>
             <dt className="text-muted-foreground">Oklad</dt>
             <dd className="tabular-nums">
-              {s.baseSalary === null ? (
+              {s.salaryUnknown ? (
+                <Badge variant="warning" data-unknown>
+                  Məlum deyil
+                </Badge>
+              ) : s.baseSalary === null ? (
                 <Badge variant="outline" className="gap-1" title={SALARY_HIDDEN_HINT} data-salary-hidden>
                   <LockIcon className="size-3" /> {SALARY_HIDDEN_LABEL}
                 </Badge>
@@ -1640,7 +1644,7 @@ function StaffPanel({ staff: s, dept, options, canEdit, onClose }: { staff: OrgS
                   id="baseSalary"
                   name="baseSalary"
                   locked={s.salaryLocked}
-                  hidden={s.baseSalary === null}
+                  hidden={s.baseSalary === null && !s.salaryUnknown}
                   value={s.baseSalary}
                   onChange={(e) => {
                     const value = e.currentTarget.value;

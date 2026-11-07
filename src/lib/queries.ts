@@ -3,7 +3,7 @@ import type { DepartmentKind, Prisma, StaffCategory } from "@prisma/client";
 import { compareDepartments, effectiveKind, structureAsOf, type ChangeRecord } from "./org-structure";
 import { computeLeaveEntitlement, workYearContaining } from "./calc/leave";
 import { computePayroll, primaryEmploymentIds, type PayrollInput } from "./calc/payroll";
-import { computeSeniority, todayUtc } from "./calc/seniority";
+import { computeSeniority, openingSeniority, todayUtc } from "./calc/seniority";
 import {
   deriveLegacyEvents,
   financialSnapshotAt,
@@ -174,10 +174,11 @@ export async function getEmployeeRows(
       position: main?.position.name ?? null,
       staffCategory: main ? STAFF_CATEGORY_LABELS[main.position.staffCategory] : null,
       department: main?.department.name ?? null,
-      hireDate: main?.hireDate.toISOString() ?? null,
-      // Məxfi maaş: rəqəm ümumiyyətlə göndərilmir (sıralama/filtr ilə də sızmır)
-      baseSalary: main && !salaryHidden ? Number(main.baseSalary) : null,
+      hireDate: main?.hireDate?.toISOString() ?? null,
+      // Məxfi maaş: rəqəm ümumiyyətlə göndərilmir (sıralama/filtr ilə də sızmır); məlum deyil — null + salaryUnknown
+      baseSalary: main && !salaryHidden && main.baseSalary !== null ? Number(main.baseSalary) : null,
       salaryHidden,
+      salaryUnknown: !!main && !salaryHidden && main.baseSalary === null,
       status: main?.status ?? null,
       contracts: p._count.employments,
       createdBy: p.createdBy?.username ?? null,
@@ -253,6 +254,8 @@ export async function getDossier(id: string, opts: { hideSalary?: boolean } = {}
     employments: raw.employments.map((e) => ({
       ...e,
       baseSalary: hide ? null : e.baseSalary,
+      /** Oklad məlum deyil (miqrasiya) — gizli maaşda göstərilmir */
+      salaryUnknown: !hide && e.baseSalary === null,
       salaryHistory: hide ? [] : e.salaryHistory,
       movements: e.movements.map((m) => maskMovementSalary(m, hide)),
     })),
@@ -262,17 +265,42 @@ export async function getDossier(id: string, opts: { hideSalary?: boolean } = {}
   const active = p.employments.filter((e) => e.status !== "TERMINATED");
   const main = active.find((e) => e.isPrimary) ?? active[0] ?? p.employments[0] ?? null;
 
-  const seniority = computeSeniority(
+  // İşə qəbul tarixi məlum olmayan müqavilələr xidmət dövrünə daxil edilmir (DAT-02)
+  const periods = p.employments.flatMap((e) => (e.hireDate ? [{ start: e.hireDate, end: e.terminationDate }] : []));
+  const computed = computeSeniority(
     { years: p.laborSeniorityYears, months: p.laborSeniorityMonths, days: p.laborSeniorityDays },
-    p.employments.map((e) => ({ start: e.hireDate, end: e.terminationDate })),
+    periods,
     // Ləğv edilmiş əmrli məzuniyyət stajdan çıxılmır
     p.absences.filter((a) => a.type === "UNPAID" && !a.cancelledAt).map((a) => ({ start: a.startDate, end: a.endDate })),
     today,
   );
+  // Heç bir müqavilənin qəbul tarixi yoxdursa — mənbədən gələn açılış stajı («mənbə: idxal, yoxlanılmayıb»)
+  const opening =
+    periods.length === 0 && p.employments.length > 0
+      ? openingSeniority(
+          {
+            years: p.openingSeniorityYears === null ? null : Number(p.openingSeniorityYears),
+            academicYears: p.openingAcademicSeniorityYears === null ? null : Number(p.openingAcademicSeniorityYears),
+            asOf: p.openingSeniorityAsOf,
+            source: p.openingSenioritySource,
+            verified: !!p.openingSeniorityVerifiedAt,
+          },
+          active.length > 0,
+          today,
+        )
+      : null;
+  const seniority = {
+    ...computed,
+    ...(opening ? { total: opening.total, totalYears: opening.totalYears } : {}),
+    /** Staj necə hesablanıb: «records» — müqavilələrdən; «opening» — açılış stajı; «unknown» — hesablamaq mümkün deyil */
+    basis: (periods.length > 0 || p.employments.length === 0 ? "records" : opening ? "opening" : "unknown") as "records" | "opening" | "unknown",
+    openingNote: opening?.note ?? null,
+    openingAcademic: opening?.academic ?? null,
+  };
 
-  const leave = main
+  const leave = main?.hireDate
     ? (() => {
-        const year = workYearContaining(main.hireDate, today);
+        const year = workYearContaining(main.hireDate!, today);
         const entitlement = computeLeaveEntitlement({
           basicLeaveDays: main.position.basicLeaveDays,
           hazardousLeaveDays: main.position.hazardousLeaveDays,
@@ -285,6 +313,8 @@ export async function getDossier(id: string, opts: { hideSalary?: boolean } = {}
         return { periodStart: year.start, periodEnd: year.end, ...entitlement };
       })()
     : null;
+  /** Məzuniyyət hüququ hesablanmır: işə qəbul tarixi məlum deyil (iş ili təyin olunmur) */
+  const leaveUnknown = !!main && !main.hireDate;
 
   // Maaş gizlədilibsə hesablama da yoxdur (brutto/netto okladdan geri hesablana bilər)
   const payroll =
@@ -306,7 +336,7 @@ export async function getDossier(id: string, opts: { hideSalary?: boolean } = {}
     0,
   );
 
-  return { person: p, main, seniority, leave, payroll, carryover, unpaidLeave: activeUnpaidLeave(p.absences, today), salaryHidden: hide };
+  return { person: p, main, seniority, leave, leaveUnknown, payroll, carryover, unpaidLeave: activeUnpaidLeave(p.absences, today), salaryHidden: hide };
 }
 
 export type Dossier = NonNullable<Awaited<ReturnType<typeof getDossier>>>;
@@ -447,9 +477,11 @@ export interface OrgStaff {
   category: string;
   degree: string | null;
   title: string | null;
-  hireDate: string;
-  /** null — maaş məxfidir (göndərilmir) */
+  /** null — işə qəbul tarixi məlum deyil */
+  hireDate: string | null;
+  /** null — maaş məxfidir (göndərilmir) və ya məlum deyil (salaryUnknown) */
   baseSalary: number | null;
+  salaryUnknown: boolean;
   /** Maaşı dəyişə bilməz (məxfi və ya öz maaşı) — sürətli redaktədə sahə kilidlidir */
   salaryLocked: boolean;
   unitShare: number;
@@ -510,8 +542,9 @@ export async function getOrgStaff(scope: string[] | null, salary: { hidden: Read
       category: STAFF_CATEGORY_LABELS[e.position.staffCategory],
       degree: degrees.includes("DSC") ? "Elmlər doktoru" : degrees.includes("PHD") ? "Fəlsəfə doktoru" : null,
       title: titles.includes("PROFESSOR") ? "Professor" : titles.includes("DOCENT") ? "Dosent" : null,
-      hireDate: e.hireDate.toISOString(),
-      baseSalary: salary.hidden.has(e.person.id) ? null : Number(e.baseSalary),
+      hireDate: e.hireDate?.toISOString() ?? null,
+      baseSalary: salary.hidden.has(e.person.id) || e.baseSalary === null ? null : Number(e.baseSalary),
+      salaryUnknown: !salary.hidden.has(e.person.id) && e.baseSalary === null,
       salaryLocked: salary.locked.has(e.person.id),
       unitShare: Number(e.unitShare),
       isPrimary: e.isPrimary,
@@ -579,9 +612,9 @@ export async function getPersonFormValues(id: string, salary: { hidden: boolean;
     citizenship: p.citizenship ?? "",
     fin: p.fin,
     ssn: p.ssn ?? "",
-    idDocType: p.idDocType,
+    idDocType: p.idDocType ?? "",
     idDocSeries: p.idDocSeries ?? "",
-    idDocNumber: p.idDocNumber,
+    idDocNumber: p.idDocNumber ?? "",
     idDocIssueDate: isoDay(p.idDocIssueDate),
     idDocIssuedBy: p.idDocIssuedBy ?? "",
     mobilePhone: p.mobilePhone ?? "",
@@ -595,7 +628,7 @@ export async function getPersonFormValues(id: string, salary: { hidden: boolean;
     hireDate: isoDay(main?.hireDate),
     schedule: main?.schedule ?? "",
     paymentForm: main?.paymentForm ?? "",
-    baseSalary: main && !salary.hidden ? String(Number(main.baseSalary)) : "",
+    baseSalary: main && !salary.hidden && main.baseSalary !== null ? String(Number(main.baseSalary)) : "",
     salaryHidden: salary.hidden ? "1" : "",
     salaryLocked: salary.locked ? "1" : "",
     unitShare: main ? String(Number(main.unitShare)) : "",
@@ -653,7 +686,11 @@ export async function getFinanceHistory(personId: string, asOf: Date | null) {
   const positions = await prisma.position.findMany({ select: { id: true, hazardousAllowancePct: true } });
   const positionPct = new Map(positions.map((x) => [x.id, x.hazardousAllowancePct === null ? null : Number(x.hazardousAllowancePct)]));
 
-  const emps: EmploymentNow[] = p.employments.map((e) => ({
+  // Tarixə görə bərpa başlanğıc tarixi və oklad tələb edir: «məlum deyil» müqavilələr ayrıca qeyd olunur (DAT-02)
+  const incomplete = p.employments
+    .filter((e) => !e.hireDate || e.baseSalary === null)
+    .map((e) => `${e.position.name} · ${e.department.name}: ${[!e.hireDate ? "işə qəbul tarixi" : "", e.baseSalary === null ? "oklad" : ""].filter(Boolean).join(" və ")} məlum deyil`);
+  const emps: EmploymentNow[] = p.employments.flatMap((e) => (e.hireDate && e.baseSalary !== null ? [{ ...e, hireDate: e.hireDate, baseSalary: e.baseSalary }] : [])).map((e) => ({
     id: e.id,
     hireDate: e.hireDate,
     terminationDate: e.terminationDate,
@@ -664,7 +701,7 @@ export async function getFinanceHistory(personId: string, asOf: Date | null) {
     positionName: e.position.name,
     baseSalary: Number(e.baseSalary),
     unitShare: Number(e.unitShare),
-    paymentForm: e.paymentForm,
+    paymentForm: e.paymentForm ?? "",
     salaryHistory: e.salaryHistory.map((r) => ({ baseSalary: Number(r.baseSalary), validFrom: r.validFrom, validTo: r.validTo })),
     movements: e.movements.map((m) => ({
       id: m.id,
@@ -778,6 +815,7 @@ export async function getFinanceHistory(personId: string, asOf: Date | null) {
   return {
     timeline,
     snapshot: asOf ? financialSnapshotAt(personNow, emps, events, asOf, positionPct) : null,
+    incomplete,
     salaryHistory: p.employments.map((e) => ({ employment: label.get(e.id) ?? "", records: [...e.salaryHistory].reverse() })).filter((x) => x.records.length > 0),
   };
 }

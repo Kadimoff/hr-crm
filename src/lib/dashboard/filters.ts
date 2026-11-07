@@ -39,14 +39,16 @@ export interface DashboardRow {
   degree: (typeof DEGREES)[number];
   /** Kökdən (1-ci səviyyə) müqavilənin bölməsinədək */
   deptPath: DeptRef[];
-  hireDate: string; // ISO
-  hireYear: number;
+  hireDate: string | null; // ISO; null — işə qəbul tarixi məlum deyil
+  hireYear: number | null;
   unitShare: number;
   gross: number;
   net: number;
   employerCost: number;
   /** Maaş məxfidir: gross/net/employerCost 0 göndərilib (cəmlərə daxil deyil) */
   salaryHidden?: boolean;
+  /** Maaş məlum deyil (oklad boşdur — miqrasiya): gross/net/employerCost 0, cəmlərə daxil deyil, ayrıca sayılır */
+  salaryUnknown?: boolean;
   /** Bu gün məzuniyyətdə və ya işdə iştirak etmir */
   onLeave: boolean;
 }
@@ -138,6 +140,8 @@ export interface Kpis {
   payrollEmployerCost: number;
   /** ƏH fonduna daxil edilməyən (maaşı məxfi) müqavilələr */
   payrollHiddenContracts: number;
+  /** Maaşı məlum olmayan (oklad boş) müqavilələr — ƏH fonduna 0 kimi daxil edilmir */
+  payrollUnknownContracts: number;
   activeLeaves: number;
 }
 
@@ -167,6 +171,7 @@ export function computeKpis(rows: DashboardRow[], staffing: StaffingRow[]): Kpis
     payrollNet: rows.reduce((s, r) => s + r.net, 0),
     payrollEmployerCost: rows.reduce((s, r) => s + r.employerCost, 0),
     payrollHiddenContracts: rows.filter((r) => r.salaryHidden).length,
+    payrollUnknownContracts: rows.filter((r) => r.salaryUnknown && !r.salaryHidden).length,
     activeLeaves: people(rows.filter((r) => r.onLeave)),
   };
 }

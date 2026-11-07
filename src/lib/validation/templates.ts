@@ -82,7 +82,9 @@ function personRef(ctx: RefContext, personCode: string): FieldIssue[] {
 function primaryHireDate(ctx: RefContext, personCode: string): Date | null {
   const list = ctx.employments.get(personCode);
   if (!list || list.length === 0) return null;
-  return list.reduce((min, e) => (e.hireDate < min ? e.hireDate : min), list[0]!.hireDate);
+  // İşə qəbul tarixi məlum olmayan müqavilələr nəzərə alınmır
+  const dates = list.flatMap((e) => (e.hireDate ? [e.hireDate] : []));
+  return dates.length ? dates.reduce((min, d) => (d < min ? d : min)) : null;
 }
 
 function dateOrder(start: Date | undefined, end: Date | undefined, endField: string, label = "Bitmə tarixi"): FieldIssue[] {
@@ -426,9 +428,10 @@ const personSchema = z.object({
   birthCountry: optText,
   birthDistrict: optText,
   birthCity: optText,
-  idDocType: reqText("Sənədin növü"),
+  /** TZ DAT-02: miqrasiyada şəxsiyyət vəsiqəsi məlum olmaya bilər — boş icazəlidir (xəbərdarlıq), UI formasında məcburidir */
+  idDocType: optText,
   idDocSeries: optText,
-  idDocNumber: reqText("Nömrə"),
+  idDocNumber: optText,
   idDocIssueDate: optDate("Verilmənin tarixi"),
   idDocIssuedBy: optText,
   fin: finCode,
@@ -447,6 +450,10 @@ const personSchema = z.object({
   passportExpiry: optDate("Passportun etibarlılıq müddəti"),
   isIdpOrRefugee: flag("Məcburi köçkün"),
   quotaBasicLeaveDays: optNumber("Kvota üzrə əsas məzuniyyət günlərinin miqdarı", { min: 1, max: 60, int: true }),
+  /** Açılış stajı (könüllü, miqrasiya): mənbədəki «Ümumi iş stajı / Akademik iş stajı (il)» və hansı tarixə olduğu */
+  openingSeniorityYears: optNumber("Ümumi iş stajı (il)", { min: 0, max: 80 }),
+  openingAcademicSeniorityYears: optNumber("Akademik iş stajı (il)", { min: 0, max: 80 }),
+  openingSeniorityAsOf: optDate("Stajın tarixi"),
 });
 
 const persons: SheetDef<typeof personSchema> = {
@@ -472,9 +479,9 @@ const persons: SheetDef<typeof personSchema> = {
     { key: "birthCountry", group: "Doğulduğu yer", header: "Ölkə" },
     { key: "birthDistrict", group: "Doğulduğu yer", header: "Rayon" },
     { key: "birthCity", group: "Doğulduğu yer", header: "Şəhər" },
-    { key: "idDocType", group: "Şəxsiyyət vəsiqəsi", header: "Sənədin növü", required: true, width: 160 },
+    { key: "idDocType", group: "Şəxsiyyət vəsiqəsi", header: "Sənədin növü", width: 160 },
     { key: "idDocSeries", group: "Şəxsiyyət vəsiqəsi", header: "Seriya", width: 80 },
-    { key: "idDocNumber", group: "Şəxsiyyət vəsiqəsi", header: "Nömrə", required: true },
+    { key: "idDocNumber", group: "Şəxsiyyət vəsiqəsi", header: "Nömrə" },
     { key: "idDocIssueDate", group: "Şəxsiyyət vəsiqəsi", header: "Verilmənin tarixi" },
     { key: "idDocIssuedBy", group: "Şəxsiyyət vəsiqəsi", header: "Kim tərəfindən verilib", width: 200 },
     { key: "fin", group: "Şəxsiyyət vəsiqəsi", header: "FİN kod", aliases: ["FİN kod", "FİN"], required: true, width: 100 },
@@ -493,6 +500,9 @@ const persons: SheetDef<typeof personSchema> = {
     { key: "passportExpiry", group: "Əgər xarici fiziki şəxsdirsə", header: "Passportun etibarlılıq müddəti" },
     { key: "isIdpOrRefugee", header: "Məcburi köçkün (Bəli/Xeyr)", aliases: ["Məcburi köçkün (hə/yox)"] },
     { key: "quotaBasicLeaveDays", header: "Kvota üzrə əsas məzuniyyət günlərinin miqdarı" },
+    { key: "openingSeniorityYears", header: "Ümumi iş stajı (il)", aliases: ["Ümumi iş stajı", "Ümumi staj (il)"] },
+    { key: "openingAcademicSeniorityYears", header: "Akademik iş stajı (il)", aliases: ["Akademik iş stajı", "Elmi-pedaqoji staj (il)"] },
+    { key: "openingSeniorityAsOf", header: "Stajın tarixi", aliases: ["Staj hansı tarixə", "Stajın hesablandığı tarix"] },
   ],
   schema: personSchema,
   semantic: (r) => {
@@ -501,6 +511,12 @@ const persons: SheetDef<typeof personSchema> = {
     if (addYears(r.birthDate, MIN_WORK_AGE) > SNAPSHOT_DATE) out.push(err("birthDate", "semantic", `Əməkdaşın yaşı ${MIN_WORK_AGE}-dən az ola bilməz`));
     if (r.idDocIssueDate && r.idDocIssueDate < r.birthDate) out.push(err("idDocIssueDate", "semantic", "Sənəd doğum tarixindən əvvəl verilə bilməz"));
     out.push(...notFuture(r.idDocIssueDate, "idDocIssueDate", "Sənədin verilmə tarixi"));
+    if (!r.idDocType || !r.idDocNumber)
+      out.push(warn(!r.idDocNumber ? "idDocNumber" : "idDocType", "semantic", `Şəxsiyyət vəsiqəsi (növü / nömrəsi) məlum deyil — «məlum deyil» kimi yazılacaq, «Məlumat tamlığı» siyahısında görünəcək`));
+    if (r.openingSeniorityYears !== undefined && !r.openingSeniorityAsOf)
+      out.push(warn("openingSeniorityAsOf", "semantic", "Açılış stajının tarixi verilməyib — staj bu tarixdən sonra artmayacaq (kəsim tarixini göstərin)"));
+    if (r.openingAcademicSeniorityYears !== undefined && r.openingSeniorityYears !== undefined && r.openingAcademicSeniorityYears > r.openingSeniorityYears + 1e-9)
+      out.push(warn("openingAcademicSeniorityYears", "semantic", "Akademik staj ümumi stajdan böyükdür"));
     if (r.taxExemptionClause && !KNOWN_TAX_CLAUSES.includes(r.taxExemptionClause))
       out.push(
         warn(
@@ -540,10 +556,11 @@ const employmentSchema = z.object({
   personCode,
   positionCode: code("Vəzifə (kodu)"),
   departmentCode: code("Bölmə/şöbə (kodu)"),
-  hireDate: reqDate("Qəbul tarixi"),
-  schedule: reqText("İş qrafiki"),
-  paymentForm: reqText("Ödəniş forması"),
-  baseSalary: reqNumber("Oklad", { min: 0 }),
+  /** TZ DAT-02: mənbədə olmayan sahələr uydurulmur — boş = «məlum deyil» (xəbərdarlıq); UI formasında məcburidir */
+  hireDate: optDate("Qəbul tarixi"),
+  schedule: optText,
+  paymentForm: optText,
+  baseSalary: optNumber("Oklad", { min: 0 }),
   /** Şablonda yoxdur; sütun əlavə edilərsə kəsr ştatlar dəqiq yoxlanılır */
   unitShare: optNumber("Ştat vahidi", { min: 0.1, max: 1.5 }),
   /** Könüllü (TZ M05-03): müddətli / müddətsiz və bitmə tarixi */
@@ -561,18 +578,22 @@ const employments: SheetDef<typeof employmentSchema> = {
     PERSON_COL,
     { key: "positionCode", header: "Vəzifə (kodu)", aliases: ["Vəzifə"], required: true },
     { key: "departmentCode", header: "Bölmə/şöbə (kodu)", aliases: ["Bölmə/şöbə", "Bölmə (kodu)"], required: true },
-    { key: "hireDate", header: "Qəbul tarixi", aliases: ["İşə qəbul tarixi"], required: true },
-    { key: "schedule", header: "İş qrafiki", aliases: ["İş rejimi və iş qrafiki", "İş rejimi/İş qrafiki"], required: true },
-    { key: "paymentForm", header: "Ödəniş forması", required: true },
-    { key: "baseSalary", header: "Oklad", aliases: ["Vəzifə maaşı"], required: true },
+    { key: "hireDate", header: "Qəbul tarixi", aliases: ["İşə qəbul tarixi"] },
+    { key: "schedule", header: "İş qrafiki", aliases: ["İş rejimi və iş qrafiki", "İş rejimi/İş qrafiki"] },
+    { key: "paymentForm", header: "Ödəniş forması" },
+    { key: "baseSalary", header: "Oklad", aliases: ["Vəzifə maaşı"] },
     { key: "unitShare", header: "Ştat vahidi", aliases: ["Stavka"] },
     { key: "contractType", header: "Müqavilənin növü (müddətli/müddətsiz)", aliases: ["Müqavilənin növü"] },
     { key: "contractEndDate", header: "Müqavilənin bitmə tarixi", aliases: ["Müqavilənin bitmə müddəti"] },
   ],
   schema: employmentSchema,
   semantic: (r) => [
-    ...(r.hireDate > SNAPSHOT_DATE ? [warn("hireDate", "semantic", `Qəbul tarixi şablonun tarixindən (${formatAzDate(SNAPSHOT_DATE)}) sonradır`)] : []),
-    ...(r.contractEndDate && r.contractEndDate < r.hireDate ? [err("contractEndDate", "semantic", "Müqavilənin bitmə tarixi qəbul tarixindən əvvəl ola bilməz")] : []),
+    ...(r.hireDate && r.hireDate > SNAPSHOT_DATE ? [warn("hireDate", "semantic", `Qəbul tarixi şablonun tarixindən (${formatAzDate(SNAPSHOT_DATE)}) sonradır`)] : []),
+    ...(!r.hireDate ? [warn("hireDate", "semantic", "İşə qəbul tarixi məlum deyil — staj açılış stajından hesablanacaq, «Məlumat tamlığı» siyahısında görünəcək")] : []),
+    ...(r.baseSalary === undefined ? [warn("baseSalary", "semantic", "Oklad məlum deyil — ƏH fonduna 0 kimi daxil edilməyəcək, «maaşı məlum olmayan» kimi sayılacaq")] : []),
+    ...(!r.schedule ? [warn("schedule", "semantic", "İş qrafiki məlum deyil")] : []),
+    ...(!r.paymentForm ? [warn("paymentForm", "semantic", "Ödəniş forması məlum deyil")] : []),
+    ...(r.contractEndDate && r.hireDate && r.contractEndDate < r.hireDate ? [err("contractEndDate", "semantic", "Müqavilənin bitmə tarixi qəbul tarixindən əvvəl ola bilməz")] : []),
     ...(r.contractEndDate && r.contractType === "MUDDETSIZ" ? [warn("contractEndDate", "semantic", "Müddətsiz müqavilədə bitmə tarixi göstərilib")] : []),
   ],
   references: (r, ctx, row) => {
@@ -583,11 +604,11 @@ const employments: SheetDef<typeof employmentSchema> = {
     if (p) out.push(p);
 
     const person = ctx.persons.get(r.personCode);
-    if (person && addYears(person.birthDate, MIN_WORK_AGE) > r.hireDate)
+    if (person && r.hireDate && addYears(person.birthDate, MIN_WORK_AGE) > r.hireDate)
       out.push(err("hireDate", "reference", `Qəbul tarixində əməkdaşın yaşı ${MIN_WORK_AGE}-dən az olub`));
 
     const pos = ctx.positions.get(r.positionCode);
-    if (pos && (pos.validFrom > r.hireDate || (pos.validTo && pos.validTo < r.hireDate)))
+    if (pos && r.hireDate && (pos.validFrom > r.hireDate || (pos.validTo && pos.validTo < r.hireDate)))
       out.push(warn("positionCode", "reference", "Vəzifə qəbul tarixində qüvvədə olmayıb (yaradılma/bağlanma tarixinə baxın)"));
     if (pos?.validTo && pos.validTo <= SNAPSHOT_DATE) out.push(err("positionCode", "reference", `Vəzifə ${formatAzDate(pos.validTo)} tarixində bağlanıb`));
 
@@ -607,14 +628,14 @@ const employments: SheetDef<typeof employmentSchema> = {
         if (used > limit + 1e-9)
           out.push(err("positionCode", "reference", `Ştat limiti aşılır: ${used} / ${unit.unitCount} ştat vahidi (${r.departmentCode} · ${r.positionCode})`));
         else ctx.staffingUsage.set(key, used);
-        if (r.baseSalary < unit.minSalary || r.baseSalary > unit.maxSalary)
+        if (r.baseSalary !== undefined && (r.baseSalary < unit.minSalary || r.baseSalary > unit.maxSalary))
           out.push(warn("baseSalary", "reference", `Oklad ştat diapazonundan kənardır (${unit.minSalary}–${unit.maxSalary} AZN)`));
       }
     }
     out.push(
       ...unique(
         ctx,
-        `emp:${r.personCode}|${r.positionCode}|${r.departmentCode}|${formatAzDate(r.hireDate)}`,
+        `emp:${r.personCode}|${r.positionCode}|${r.departmentCode}|${r.hireDate ? formatAzDate(r.hireDate) : "?"}`,
         row,
         "personCode",
         (prev) => `Eyni təyinat №${prev} sətirdə təkrarlanır`,
@@ -1458,7 +1479,7 @@ const terminations: SheetDef<typeof terminationSchema> = {
     if (!ctx.persons.has(r.personCode)) return out;
     const match = (ctx.employments.get(r.personCode) ?? []).find((e) => e.active && e.positionCode === r.positionCode && e.departmentCode === r.departmentCode);
     if (!match) out.push(err("positionCode", "reference", `${r.departmentCode} bölməsində ${r.positionCode} vəzifəsində aktiv əmək müqaviləsi tapılmadı`));
-    else if (r.terminationDate < match.hireDate)
+    else if (match.hireDate && r.terminationDate < match.hireDate)
       out.push(err("terminationDate", "reference", `Xitam tarixi qəbul tarixindən (${formatAzDate(match.hireDate)}) əvvəl ola bilməz`));
     out.push(
       ...unique(ctx, `term:${r.personCode}|${r.positionCode}|${r.departmentCode}`, row, "personCode", (p) => `Eyni müqaviləyə xitam №${p} sətirdə artıq var`),
