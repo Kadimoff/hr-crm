@@ -36,6 +36,7 @@ export default async function UsersPage() {
           canDeleteDocuments: u.canDeleteDocuments,
           person: u.person ? `${u.person.code} — ${u.person.fullName}` : null,
           canViewRestrictedSalaries: u.canViewRestrictedSalaries,
+          canApproveCharters: u.canApproveCharters,
           mustChangePassword: u.mustChangePassword,
           lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
           createdAt: u.createdAt.toISOString(),

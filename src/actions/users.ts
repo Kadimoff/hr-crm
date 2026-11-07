@@ -46,6 +46,7 @@ const updateSchema = withDepartmentRule(
     /** Maaş məxfiliyi: hesabın sahibi olan əməkdaşın kodu (boş — bağlantı yoxdur) */
     personCode: z.preprocess(blank, z.string().trim().max(64).optional()),
     canViewRestrictedSalaries: checkbox,
+    canApproveCharters: checkbox,
   }),
 );
 
@@ -99,6 +100,8 @@ export async function updateUserAction(_prev: UserFormState, form: FormData): Pr
   const canDeleteDocuments = role !== "ROOT" && parsed.data.canDeleteDocuments;
   // Məxfi maaşları görmək: yalnız kadr əməkdaşına verilir (root həmişə görür, şöbə rəhbəri heç vaxt)
   const canViewRestrictedSalaries = role === "HR" && parsed.data.canViewRestrictedSalaries;
+  // Əsasnamə / vəzifə təlimatını təsdiq: yalnız kadr əməkdaşına verilir (root həmişə təsdiq edir)
+  const canApproveCharters = role === "HR" && parsed.data.canApproveCharters;
   // «personCode» — «Kod — Ad» siyahısından seçilib: kod birinci hissədir
   const code = parsed.data.personCode?.split(/\s+—\s+/)[0]?.trim();
   const person = code ? await prisma.person.findUnique({ where: { code }, select: { id: true, fullName: true, code: true } }) : null;
@@ -119,7 +122,7 @@ export async function updateUserAction(_prev: UserFormState, form: FormData): Pr
   const after = await prisma.$transaction(async (tx) => {
     const u = await tx.user.update({
       where: { id },
-      data: { fullName, role, isActive, canDeleteDocuments, departmentId: role === "DEPT_HEAD" ? departmentId : null, personId: person?.id ?? null, canViewRestrictedSalaries },
+      data: { fullName, role, isActive, canDeleteDocuments, departmentId: role === "DEPT_HEAD" ? departmentId : null, personId: person?.id ?? null, canViewRestrictedSalaries, canApproveCharters },
       include: { department: { select: { name: true } }, person: { select: { code: true, fullName: true } } },
     });
     // Deaktiv edilən və ya rolu dəyişən istifadəçinin açıq sessiyaları bağlanır
@@ -137,6 +140,7 @@ export async function updateUserAction(_prev: UserFormState, form: FormData): Pr
       canDeleteDocuments: before.canDeleteDocuments,
       person: personLabel(before.person),
       canViewRestrictedSalaries: before.canViewRestrictedSalaries,
+      canApproveCharters: before.canApproveCharters,
     },
     {
       fullName: after.fullName,
@@ -146,6 +150,7 @@ export async function updateUserAction(_prev: UserFormState, form: FormData): Pr
       canDeleteDocuments: after.canDeleteDocuments,
       person: personLabel(after.person),
       canViewRestrictedSalaries: after.canViewRestrictedSalaries,
+      canApproveCharters: after.canApproveCharters,
     },
   );
   if (Object.keys(changes).length) {

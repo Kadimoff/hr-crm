@@ -6,6 +6,11 @@ export const DOCUMENT_KINDS: Record<DocumentKind, string> = {
   MUQAVILE: "Müqavilələr",
   SEXSIYYET: "Şəxsiyyət sənədləri",
   TEHSIL: "Təhsil sənədləri",
+  ELMI_DERECE: "Elmi dərəcə və ad",
+  HERBI: "Hərbi bilet",
+  SOSIAL_STATUS: "Sosial status sənədləri",
+  ATTESTASIYA: "Attestasiya",
+  VEZIFE_TELIMATI_TANISLIQ: "Vəzifə təlimatı ilə tanışlıq",
   ARAYIS: "Arayışlar",
   DIGER: "Digər",
 };

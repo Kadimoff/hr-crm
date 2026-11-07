@@ -27,6 +27,7 @@ export interface UserRow {
   /** Bağlı əməkdaş: «Kod — Ad» */
   person: string | null;
   canViewRestrictedSalaries: boolean;
+  canApproveCharters: boolean;
   mustChangePassword: boolean;
   lastLoginAt: string | null;
   createdAt: string;
@@ -191,6 +192,13 @@ function EditUserDialog({ user, departments, isMe, persons }: { user: UserRow; d
               </span>
             </span>
           </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" name="canApproveCharters" defaultChecked={user.canApproveCharters} className="mt-0.5 size-4 accent-[var(--primary)]" data-charter-approver />
+            <span>
+              Əsasnamə və vəzifə təlimatlarını təsdiq edə bilər
+              <span className="block text-xs text-muted-foreground">Yalnız kadr əməkdaşı üçün: qaralamanı «Təsdiqlənib» statusuna keçirir və köhnə versiyanı qüvvədən salır. Root həmişə təsdiq edə bilər.</span>
+            </span>
+          </label>
           {user.role !== "ROOT" && (
             <label className="flex items-start gap-2 text-sm">
               <input type="checkbox" name="canDeleteDocuments" defaultChecked={user.canDeleteDocuments} className="mt-0.5 size-4 accent-[var(--primary)]" />
@@ -290,6 +298,7 @@ export function UsersAdmin({ users, departments, meId, persons }: { users: UserR
                     )}
                     {u.role !== "ROOT" && u.canDeleteDocuments && <Badge variant="outline">Sənəd silə bilər</Badge>}
                     {u.role === "HR" && u.canViewRestrictedSalaries && <Badge variant="warning">Məxfi maaşları görür</Badge>}
+                    {u.role === "HR" && u.canApproveCharters && <Badge variant="outline">Əsasnamə təsdiq edir</Badge>}
                   </div>
                   {u.person && (
                     <div className="mt-1 text-xs text-muted-foreground" data-user-person>

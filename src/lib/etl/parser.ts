@@ -201,7 +201,7 @@ export async function streamWorkbook(
   });
   await readSheets(sheetsIter, templateKey, onChunk, chunkSize, issues, sheets, seenKeys);
 
-  const missing = TEMPLATES[templateKey].sheets.filter((key) => !seenKeys.has(key)).map((key) => getSheet(key).title);
+  const missing = TEMPLATES[templateKey].sheets.filter((key) => !seenKeys.has(key) && !getSheet(key).optional).map((key) => getSheet(key).title);
   if (missing.length > 0) {
     issues.push({ sheet: "Vərəqlər", severity: "warning", message: `Faylda olmayan vərəqlər ötürüldü: ${missing.join(", ")}` });
   }

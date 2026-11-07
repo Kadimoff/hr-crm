@@ -20,6 +20,7 @@ import {
   seniorityPart,
 } from "./primitives";
 import type { ColumnDef, FieldIssue, RefContext, SheetDef, SheetKey, TemplateDef, TemplateKey } from "./types";
+import { DEPARTMENT_KIND_LABELS, MAX_DEPT_LEVEL, ordinal } from "../org-structure";
 
 /*
  * Şablon tərifləri "Kadr məlumatlarının yüklənməsi üçün şablonlar — əməkhaqqı üçün yenilənmiş 29.09.2025"
@@ -113,16 +114,35 @@ const proficiency = (label: string) =>
   enumFrom(label, { əla: "EXCELLENT", yaxşı: "GOOD", kafi: "SATISFACTORY" } as const);
 
 // ============================================================================
-//  5 Struktur bölmələri.xlsx — 4 vərəq, səviyyə vərəqdən gəlir — Mərhələ 1
+//  5 Struktur bölmələri.xlsx — 6 vərəqədək, səviyyə vərəqdən gəlir — Mərhələ 1
+//  1–4-cü vərəqlər köhnə şablondakı kimidir; 5-ci və 6-cı vərəqlər və yeni sütunlar (növ, sıra, ayrıca hüquqi şəxs,
+//  qrup, rəhbərin vəzifəsi, kampus, büdcə mərkəzi) könüllüdür — köhnə fayllar dəyişmədən işləyir.
 // ============================================================================
 
-export const DEPARTMENT_SHEETS = ["departments1", "departments2", "departments3", "departments4"] as const;
+export const DEPARTMENT_SHEETS = ["departments1", "departments2", "departments3", "departments4", "departments5", "departments6"] as const;
 export const isDepartmentSheet = (k: string): k is (typeof DEPARTMENT_SHEETS)[number] => (DEPARTMENT_SHEETS as readonly string[]).includes(k);
 export const departmentLevel = (k: string): number => DEPARTMENT_SHEETS.indexOf(k as (typeof DEPARTMENT_SHEETS)[number]) + 1;
 
-const ORDINAL = ["", "1-ci", "2-ci", "3-cü", "4-cü"];
+const ORDINAL = ["", ...Array.from({ length: MAX_DEPT_LEVEL }, (_, i) => ordinal(i + 1))];
 
-function departmentSheet(level: 1 | 2 | 3 | 4) {
+/** «Bölmənin növü» — Azərbaycanca ad, kod (FAKULTE) və geniş yayılmış sinonimlər */
+const KIND_WORDS: Record<string, keyof typeof DEPARTMENT_KIND_LABELS> = {
+  ...Object.fromEntries(Object.entries(DEPARTMENT_KIND_LABELS).map(([k, label]) => [label, k as keyof typeof DEPARTMENT_KIND_LABELS])),
+  ...Object.fromEntries(Object.keys(DEPARTMENT_KIND_LABELS).map((k) => [k, k as keyof typeof DEPARTMENT_KIND_LABELS])),
+  "Prorektor bloku": "KURATOR_BLOKU",
+  Prorektor: "KURATOR_BLOKU",
+  Kurator: "KURATOR_BLOKU",
+  Fakultə: "FAKULTE",
+  Mərkəz: "MERKEZ",
+  "Elmi-tədqiqat institutu": "INSTITUT",
+  "Tədqiqat qrupu": "TEDQIQAT_QRUPU",
+  "Kollegial orqan": "SURA",
+};
+
+/** Bəli/Xeyr; boş — undefined (sütun varsa committer false yazır, yoxdursa mövcud dəyərə toxunmur) */
+const optFlag = (label: string) => flag(label).optional();
+
+function departmentSheet(level: number) {
   const schema = z
     .object({
       code: code("Kod"),
@@ -132,6 +152,13 @@ function departmentSheet(level: 1 | 2 | 3 | 4) {
       isChair: flag("Kafedra"),
       createdOn: reqDate("Bölmənin yaradılma tarixi"),
       closedOn: optDate("Bölmənin bağlanma tarixi"),
+      kind: enumFrom("Bölmənin növü", KIND_WORDS, false),
+      sortOrder: optNumber("Sıra", { min: 0, max: 100000, int: true }),
+      isExternal: optFlag("Ayrıca hüquqi şəxs"),
+      isGroup: optFlag("Qrup (ştatsız)"),
+      headPositionTitle: optText,
+      campus: optText,
+      budgetCenter: optText,
     })
     .transform((r) => ({ ...r, level }));
 
@@ -143,6 +170,13 @@ function departmentSheet(level: 1 | 2 | 3 | 4) {
     { key: "isChair", header: "Kafedra (Bəli/Xeyr)", aliases: ["Kafedra"] },
     { key: "createdOn", header: "Bölmənin yaradılma tarixi", aliases: ["Yaradılma tarixi"], required: true },
     { key: "closedOn", header: "Bölmənin bağlanma tarixi", aliases: ["Bağlanma tarixi"] },
+    { key: "kind", header: "Bölmənin növü", aliases: ["Növü", "Növ"] },
+    { key: "sortOrder", header: "Sıra", aliases: ["Sıra nömrəsi", "Sıralama"] },
+    { key: "isExternal", header: "Ayrıca hüquqi şəxs (Bəli/Xeyr)", aliases: ["Ayrıca hüquqi şəxs"] },
+    { key: "isGroup", header: "Qrup (ştatsız) (Bəli/Xeyr)", aliases: ["Qrup (ştatsız)", "Ştatsız qrup"] },
+    { key: "headPositionTitle", header: "Rəhbərin vəzifəsi", aliases: ["Rəhbər vəzifəsi"], width: 200 },
+    { key: "campus", header: "Kampus" },
+    { key: "budgetCenter", header: "Büdcə mərkəzi" },
   ];
 
   const def: SheetDef<typeof schema> = {
@@ -153,10 +187,13 @@ function departmentSheet(level: 1 | 2 | 3 | 4) {
     title: `${ORDINAL[level]} mərhələ bölmələr`,
     columns,
     schema,
+    optional: level > 4,
     semantic: (r) => {
       const out: FieldIssue[] = [];
       if (r.parentCode === r.code) out.push(err("parentCode", "semantic", "Bölmə özünə tabe ola bilməz"));
       if (r.isFaculty && r.isChair) out.push(err("isChair", "semantic", "Bölmə eyni zamanda həm fakultə, həm kafedra ola bilməz"));
+      if (r.kind && r.isFaculty && r.kind !== "FAKULTE") out.push(err("kind", "semantic", `Növ «${DEPARTMENT_KIND_LABELS[r.kind]}», amma «Fakultə» = Bəli — uyğun gəlmir`));
+      if (r.kind && r.isChair && r.kind !== "KAFEDRA") out.push(err("kind", "semantic", `Növ «${DEPARTMENT_KIND_LABELS[r.kind]}», amma «Kafedra» = Bəli — uyğun gəlmir`));
       if (r.isChair && level === 1) out.push(warn("isChair", "semantic", "Kafedra adətən fakultənin tabeliyində olur (2-ci və aşağı mərhələ)"));
       out.push(...dateOrder(r.createdOn, r.closedOn, "closedOn", "Bağlanma tarixi"));
       return out;
@@ -187,6 +224,8 @@ const departments1 = departmentSheet(1);
 const departments2 = departmentSheet(2);
 const departments3 = departmentSheet(3);
 const departments4 = departmentSheet(4);
+const departments5 = departmentSheet(5);
+const departments6 = departmentSheet(6);
 
 // ============================================================================
 //  1 Kadr Cədvəlləri.xlsx → Vəzifələr — Mərhələ 2
@@ -507,6 +546,9 @@ const employmentSchema = z.object({
   baseSalary: reqNumber("Oklad", { min: 0 }),
   /** Şablonda yoxdur; sütun əlavə edilərsə kəsr ştatlar dəqiq yoxlanılır */
   unitShare: optNumber("Ştat vahidi", { min: 0.1, max: 1.5 }),
+  /** Könüllü (TZ M05-03): müddətli / müddətsiz və bitmə tarixi */
+  contractType: enumFrom("Müqavilənin növü", { müddətli: "MUDDETLI", müddətsiz: "MUDDETSIZ" } as const, false),
+  contractEndDate: optDate("Müqavilənin bitmə tarixi"),
 });
 
 const employments: SheetDef<typeof employmentSchema> = {
@@ -524,9 +566,15 @@ const employments: SheetDef<typeof employmentSchema> = {
     { key: "paymentForm", header: "Ödəniş forması", required: true },
     { key: "baseSalary", header: "Oklad", aliases: ["Vəzifə maaşı"], required: true },
     { key: "unitShare", header: "Ştat vahidi", aliases: ["Stavka"] },
+    { key: "contractType", header: "Müqavilənin növü (müddətli/müddətsiz)", aliases: ["Müqavilənin növü"] },
+    { key: "contractEndDate", header: "Müqavilənin bitmə tarixi", aliases: ["Müqavilənin bitmə müddəti"] },
   ],
   schema: employmentSchema,
-  semantic: (r) => (r.hireDate > SNAPSHOT_DATE ? [warn("hireDate", "semantic", `Qəbul tarixi şablonun tarixindən (${formatAzDate(SNAPSHOT_DATE)}) sonradır`)] : []),
+  semantic: (r) => [
+    ...(r.hireDate > SNAPSHOT_DATE ? [warn("hireDate", "semantic", `Qəbul tarixi şablonun tarixindən (${formatAzDate(SNAPSHOT_DATE)}) sonradır`)] : []),
+    ...(r.contractEndDate && r.contractEndDate < r.hireDate ? [err("contractEndDate", "semantic", "Müqavilənin bitmə tarixi qəbul tarixindən əvvəl ola bilməz")] : []),
+    ...(r.contractEndDate && r.contractType === "MUDDETSIZ" ? [warn("contractEndDate", "semantic", "Müddətsiz müqavilədə bitmə tarixi göstərilib")] : []),
+  ],
   references: (r, ctx, row) => {
     const out: FieldIssue[] = [...personRef(ctx, r.personCode)];
     const d = requireKey(ctx.departments, ctx, "departments", "departmentCode", "Bölmə", r.departmentCode);
@@ -1428,6 +1476,8 @@ export const SHEETS = {
   departments2,
   departments3,
   departments4,
+  departments5,
+  departments6,
   positions,
   staffing,
   persons,

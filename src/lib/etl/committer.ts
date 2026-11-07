@@ -20,6 +20,9 @@ import { logFinanceChanges, moneyValue, pctValue, todayUtc } from "../finance-lo
 import { isSalaryPrivileged, type SalaryViewer } from "../salary-privacy";
 import { lockedSalaryIds, restrictedDepartmentIds } from "../salary-restriction";
 import { emit } from "./progress";
+import { changeFields, closeBlockers, syncKindFlags } from "../org-structure";
+import { closeImpact, recomputeLevels } from "../department-changes";
+import { ACK_REASON, ensureJobDescriptionAcks } from "../job-description-acks";
 import { STAGE_ORDER } from "./validator";
 
 type Tx = Prisma.TransactionClient;
@@ -113,9 +116,53 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups, guard: SalaryGua
       if (current && guard.depts.has(current.id) && current.parentId !== parentId && !(parentId && guard.depts.has(parentId)))
         throw new CommitError("Maaşları məxfi olan bölmənin tabeliyini yalnız root və ya səlahiyyətli hesab dəyişə bilər");
     }
-    const data = { name: r.name, level: r.level, isFaculty: r.isFaculty, isChair: r.isChair, parentId, createdOn: r.createdOn, closedOn: r.closedOn ?? null };
+    const before = await tx.department.findUnique({ where: { code: r.code }, select: { id: true, name: true, parentId: true, closedOn: true, kind: true } });
+    // Yeni sütunlar könüllüdür: faylda sütun yoxdursa mövcud dəyərə toxunulmur (köhnə şablonlar)
+    const has = (k: string) => Object.hasOwn(row.data, k);
+    const kindGiven = has("kind") && r.kind !== undefined;
+    const flags = syncKindFlags({ kind: kindGiven ? r.kind : null, isFaculty: r.isFaculty, isChair: r.isChair });
+    const data = {
+      name: r.name,
+      level: r.level,
+      isFaculty: flags.isFaculty,
+      isChair: flags.isChair,
+      parentId,
+      createdOn: r.createdOn,
+      closedOn: r.closedOn ?? null,
+      // Növ: sütunda verilib — o; verilməyib — fakültə/kafedra bayrağından (mövcud başqa növ saxlanılır)
+      ...(kindGiven || flags.kind || !before?.kind || before.kind === "FAKULTE" || before.kind === "KAFEDRA" ? { kind: flags.kind } : {}),
+      ...(has("sortOrder") ? { sortOrder: r.sortOrder ?? null } : {}),
+      ...(has("isExternal") ? { isExternal: r.isExternal ?? false } : {}),
+      ...(has("isGroup") ? { isGroup: r.isGroup ?? false } : {}),
+      ...(has("headPositionTitle") ? { headPositionTitle: r.headPositionTitle ?? null } : {}),
+      ...(has("campus") ? { campus: r.campus ?? null } : {}),
+      ...(has("budgetCenter") ? { budgetCenter: r.budgetCenter ?? null } : {}),
+    };
+    // Bağlanma (M01-03): aktiv müqavilə və ya bağlanmamış alt bölmə varsa — rədd
+    const closing = !!data.closedOn && (!before || !before.closedOn || before.closedOn.getTime() !== data.closedOn.getTime());
+    if (before && closing) {
+      // Alt bölmələr eyni faylda sonradan (növbəti vərəqdə) bağlana bilər — idxalda yalnız aktiv müqavilə bloklayır
+      const blockers = closeBlockers({ ...(await closeImpact(tx, before.id, data.closedOn!)), openChildren: 0 });
+      if (blockers.length) throw new CommitError(`Bölmə bağlana bilməz: ${blockers.join("; ")}`);
+    }
     const d = await tx.department.upsert({ where: { code: r.code }, create: { code: r.code, ...data }, update: data, select: { id: true } });
     lk.departments.set(r.code, d.id);
+    if (before && before.parentId !== parentId) await recomputeLevels(tx, d.id);
+    // Struktur tarixçəsi (M01-01): yaradılma, ad / tabelik dəyişikliyi, bağlanma
+    const after = changeFields({ name: data.name, parentId, closedOn: data.closedOn });
+    const prev = before ? changeFields(before) : null;
+    const today = todayUtc();
+    const log: { kind: "CREATE" | "RENAME" | "MOVE" | "CLOSE"; effectiveDate: Date; before: object | null; after: object }[] = [];
+    if (!prev) log.push({ kind: "CREATE", effectiveDate: r.createdOn, before: null, after });
+    else {
+      if (prev.name !== after.name) log.push({ kind: "RENAME", effectiveDate: today, before: { name: prev.name }, after: { name: after.name } });
+      if (prev.parentId !== after.parentId) log.push({ kind: "MOVE", effectiveDate: today, before: { parentId: prev.parentId }, after: { parentId: after.parentId } });
+      if (closing) log.push({ kind: "CLOSE", effectiveDate: data.closedOn!, before: { closedOn: prev.closedOn }, after: { closedOn: after.closedOn } });
+    }
+    if (log.length)
+      await tx.departmentChange.createMany({
+        data: log.map((c) => ({ departmentId: d.id, kind: c.kind, effectiveDate: c.effectiveDate, before: (c.before ?? undefined) as Prisma.InputJsonValue | undefined, after: c.after as Prisma.InputJsonValue, source: "IMPORT", appliedAt: new Date(), createdById: lk.userId })),
+      });
     return;
   }
 
@@ -214,17 +261,25 @@ async function writeEntity(tx: Tx, row: StagedRow, lk: Lookups, guard: SalaryGua
       // Maaş məxfiliyi: imtiyazsız istifadəçi məxfi şəxsin okladını idxalla dəyişə bilməz
       const salaryLocked = guard.locked.has(personId);
       const data = { schedule: r.schedule, paymentForm: r.paymentForm, unitShare: r.unitShare ?? 1, ...(salaryLocked ? {} : { baseSalary: r.baseSalary }) };
+      // Müqavilənin növü / bitmə tarixi — könüllü sütunlar: faylda yoxdursa toxunulmur
+      const contract = {
+        ...(Object.hasOwn(row.data, "contractType") ? { contractType: r.contractType ?? null } : {}),
+        ...(Object.hasOwn(row.data, "contractEndDate") ? { contractEndDate: r.contractEndDate ?? null } : {}),
+      };
       if (!existing) {
         if (salaryLocked) {
           guard.blocked.push(row.id);
           throw new CommitError(SALARY_BLOCKED_MESSAGE);
         }
-        await tx.employment.create({
-          data: { personId, positionId, departmentId, hireDate: r.hireDate, ...data, baseSalary: r.baseSalary, salaryHistory: { create: { baseSalary: r.baseSalary, validFrom: r.hireDate } } },
+        const created = await tx.employment.create({
+          data: { personId, positionId, departmentId, hireDate: r.hireDate, ...data, ...contract, baseSalary: r.baseSalary, salaryHistory: { create: { baseSalary: r.baseSalary, validFrom: r.hireDate } } },
+          select: { id: true },
         });
+        // Qüvvədə olan vəzifə təlimatı ilə tanışlıq tapşırığı (M03-02)
+        await ensureJobDescriptionAcks(tx, [created.id], ACK_REASON.HIRE);
         return;
       }
-      await tx.employment.update({ where: { id: existing.id }, data });
+      await tx.employment.update({ where: { id: existing.id }, data: { ...data, ...contract } });
       const today = todayUtc();
       // Maliyyə tarixçəsi: idxal ilə dəyişən oklad / ştat payı / ödəniş forması — idxal günündən qüvvədə
       await logFinanceChanges(tx, { personId, employmentId: existing.id, effectiveDate: today, source: "IMPORT", userId: lk.userId }, [

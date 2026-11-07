@@ -28,6 +28,8 @@ export interface CurrentUser {
   personId: string | null;
   /** Məxfi maaşları görə / dəyişə bilər (root verir; ROOT həmişə) */
   canViewRestrictedSalaries: boolean;
+  /** Əsasnamə və vəzifə təlimatlarını təsdiq edə bilər (root verir; ROOT həmişə) */
+  canApproveCharters: boolean;
 }
 
 /** Klientin IP ünvanı — TCP soketdən (bax: client-ip.ts); X-Forwarded-For yalnız TRUSTED_PROXY_HOPS verildikdə nəzərə alınır */
@@ -84,6 +86,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
           mustChangePassword: true,
           personId: true,
           canViewRestrictedSalaries: true,
+          canApproveCharters: true,
           departmentId: true,
           department: { select: { name: true } },
         },
@@ -103,6 +106,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     mustChangePassword: u.mustChangePassword,
     personId: u.personId,
     canViewRestrictedSalaries: u.canViewRestrictedSalaries,
+    canApproveCharters: u.canApproveCharters,
   };
 });
 

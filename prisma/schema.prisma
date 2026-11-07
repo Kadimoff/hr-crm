@@ -172,12 +172,33 @@ enum ImportStage {
 //  1. TƏŞKİLATİ STRUKTUR
 // ----------------------------------------------------------------------------
 
-/// 5 Struktur bölmələri.xlsx — 4 səviyyəli ağac
+/// Struktur düyününün növü (TZ M01) — null: köhnə qeyd (isFaculty / isChair-dən təxmin edilir)
+enum DepartmentKind {
+  KURATOR_BLOKU // prorektor / kurator bloku
+  DEPARTAMENT
+  SOBE // şöbə
+  BOLME // bölmə
+  SEKTOR
+  MERKEZ // mərkəz
+  LABORATORIYA
+  TEDQIQAT_QRUPU
+  FAKULTE
+  KAFEDRA
+  XIDMET
+  INSTITUT
+  KOLLEC
+  BINA
+  MUZEY
+  SURA // kollegial orqan
+  DIGER
+}
+
+/// 5 Struktur bölmələri.xlsx — 6 səviyyəyədək ağac
 model Department {
   id        String       @id @default(cuid())
   code      String       @unique
   name      String
-  level     Int // 1..4
+  level     Int // 1..6
   isFaculty Boolean      @default(false)
   isChair   Boolean      @default(false) // kafedra
   parentId  String?
@@ -193,11 +214,122 @@ model Department {
   /// və «məxfi maaşları görə bilər» hesabları görür/dəyişir (root qoşur). Default false — heç nə dəyişmir.
   salaryRestricted Boolean        @default(false)
 
+  /// Düyünün növü (Departament, Şöbə, Fakültə, …); null — köhnə qeyd
+  kind              DepartmentKind?
+  /// Eyni valideyn daxilində sıra (təsdiqlənmiş sxemdəki ardıcıllıq); null — koda görə
+  sortOrder         Int?
+  /// Ayrıca hüquqi şəxs (institut, kollec, UFAZ) — hesabat cəmlərində ayrıca göstərilir
+  isExternal        Boolean             @default(false)
+  /// Ştatsız qrup / kollegial düyün (Şura, prorektorlar qrupu) — ştat və vakansiya sayılmır
+  isGroup           Boolean             @default(false)
+  /// Rəhbərin vəzifəsi (məs. «Prorektor (tədris üzrə)»)
+  headPositionTitle String?
+  campus            String?
+  budgetCenter      String?
+  changes           DepartmentChange[]
+  charters          DepartmentCharter[]
+  jobDescriptions   JobDescription[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([parentId])
   @@index([level])
+}
+
+enum DepartmentChangeKind {
+  CREATE // yaradılma
+  RENAME // adın dəyişdirilməsi
+  MOVE // tabeliyin dəyişdirilməsi
+  CLOSE // bağlanma (ləğv)
+  MERGE // başqa bölmə ilə birləşmə (bölmə bağlanır, hədəf bölmə qalır)
+}
+
+/// Struktur dəyişikliklərinin tarixçəsi (TZ M01-01, DAT-01). before / after: { name, parentId, closedOn, … }.
+/// effectiveDate > bu gün — planlaşdırılmış dəyişiklik: appliedAt null qalır, cari struktur dəyişmir; tarix çatanda
+/// tətbiq olunur (worker-in gündəlik işi və struktur səhifəsinin açılışı). «Tarixə görə struktur» buradan bərpa olunur.
+model DepartmentChange {
+  id                 String               @id @default(cuid())
+  departmentId       String
+  department         Department           @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  kind               DepartmentChangeKind
+  effectiveDate      DateTime             @db.Date
+  orderNumber        String?
+  orderDate          DateTime?            @db.Date
+  before             Json?                @db.JsonB
+  after              Json?                @db.JsonB
+  /// MERGE: birləşdiyi (qalan) bölmə
+  targetDepartmentId String?
+  note               String?
+  /// UI | IMPORT | SYSTEM
+  source             String               @default("UI")
+  /// Bölməyə tətbiq olunma anı; null — planlaşdırılıb (gələcək tarix) və ya ləğv edilib
+  appliedAt          DateTime?
+  cancelledAt        DateTime?
+  createdById        String?
+  createdBy          User?                @relation("DepartmentChangeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt          DateTime             @default(now())
+
+  @@index([departmentId, effectiveDate])
+  @@index([effectiveDate, appliedAt])
+}
+
+/// Əsasnamə və vəzifə təlimatının həyat dövrü (TZ M01-02, M03-02)
+enum RegulationStatus {
+  QARALAMA // hazırlanır
+  HUQUQI_REYDE // hüquqi rəydə
+  TESDIQLENIB // təsdiqlənib (qüvvədədir) — mətn və fayl dəyişdirilmir
+  QUVVEDEN_DUSUB // yeni versiya ilə əvəzlənib / ləğv edilib
+}
+
+/// Struktur bölməsinin əsasnaməsi — versiyalı. Təsdiqlənmiş versiya dəyişdirilmir (server), yenisi yaradılır.
+model DepartmentCharter {
+  id               String           @id @default(cuid())
+  departmentId     String
+  department       Department       @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  version          Int
+  status           RegulationStatus @default(QARALAMA)
+  title            String
+  purpose          String?
+  functions        String?
+  authorities      String?
+  responsibilities String?
+  reportingLine    String?
+  approvedOn       DateTime?        @db.Date
+  /// Təsdiq edən (mətn, məs. «Rektor»)
+  approvedBy       String?
+  orderNumber      String?
+  effectiveFrom    DateTime?        @db.Date
+  effectiveTo      DateTime?        @db.Date
+  nextReviewOn     DateTime?        @db.Date
+  legalReviewText  String?
+  legalReviewDate  DateTime?        @db.Date
+  legalReviewBy    String?
+  /// İmzalı fayl (PDF) — DOCUMENTS_DIR/_org/charters/<id>.<uzantı>
+  fileName         String?
+  fileExtension    String?
+  fileSize         Int?
+  fileStoragePath  String?
+  createdById      String?
+  createdBy        User?            @relation("CharterCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedById     String?
+  approvedByUser   User?            @relation("CharterApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@unique([departmentId, version])
+  @@index([status, nextReviewOn])
+}
+
+/// TZ §3 təsnifatı: A1 akademik tədris, A2 elmi tədqiqat, N1–N5 qeyri-akademik qruplar
+enum PositionClass {
+  A1
+  A2
+  N1
+  N2
+  N3
+  N4
+  N5
 }
 
 /// 1 Kadr Cədvəlləri.xlsx → Vəzifələr
@@ -216,9 +348,16 @@ model Position {
   isAdministrativeManagement Boolean          @default(false) // inzibati idarəetmə personalı
   validFrom                  DateTime         @db.Date // vəzifənin yaradılma tarixi
   validTo                    DateTime?        @db.Date // vəzifənin bağlanma tarixi
+  /// Peşə ailəsi (TZ M03-01), məs. «Maliyyə», «İT»
+  jobFamily                  String?
+  /// TZ §3 idarəetmə təsnifatı (staffCategory — rəsmi statistik kateqoriya, ayrıca saxlanılır)
+  classCode                  PositionClass?
+  /// Grade (gələcək M11 üçün), məs. «G5»
+  gradeCode                  String?
 
-  staffingUnits StaffingUnit[]
-  employments   Employment[]
+  staffingUnits   StaffingUnit[]
+  employments     Employment[]
+  jobDescriptions JobDescription[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -395,9 +534,18 @@ model Employment {
   terminationDate    DateTime? @db.Date
   terminationArticle String? // AR ƏM maddəsi
 
-  salaryHistory    SalaryRecord[]
-  movements        EmploymentMovement[]
-  financialChanges FinancialChange[]
+  /// Müqavilənin növü (TZ M05-02/03); null — qeyd edilməyib
+  contractType     ContractType?
+  /// Müddətli müqavilənin bitmə tarixi — 90/60/30 günlük bildirişlər
+  contractEndDate  DateTime?     @db.Date
+  /// Müqavilə sonu üzrə məsul şəxs və sonrakı qərar (sadə mətn)
+  contractEndOwner String?
+  contractEndNote  String?
+
+  salaryHistory      SalaryRecord[]
+  movements          EmploymentMovement[]
+  financialChanges   FinancialChange[]
+  jobDescriptionAcks JobDescriptionAck[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -407,6 +555,11 @@ model Employment {
   @@index([positionId, status])
 }
 
+enum ContractType {
+  MUDDETLI // müddətli
+  MUDDETSIZ // müddətsiz
+}
+
 enum DocumentKind {
   EMR // əmr
   MUQAVILE // əmək müqaviləsi və əlavələri
@@ -414,6 +567,74 @@ enum DocumentKind {
   TEHSIL // diplom, sertifikat, elmi dərəcə
   ARAYIS // arayış, tibbi sənəd
   DIGER // digər
+  HERBI // hərbi bilet
+  SOSIAL_STATUS // sosial status sənədləri
+  VEZIFE_TELIMATI_TANISLIQ // vəzifə təlimatı ilə tanışlıq vərəqəsi
+  ATTESTASIYA
+  ELMI_DERECE // elmi dərəcə / ad diplomları
+}
+
+/// Vəzifə təlimatı — versiyalı (TZ M03-02). departmentId null — vəzifə üzrə ümumi təlimat; verilibsə həmin bölmə üçün.
+model JobDescription {
+  id               String              @id @default(cuid())
+  positionId       String
+  position         Position            @relation(fields: [positionId], references: [id], onDelete: Restrict)
+  departmentId     String?
+  department       Department?         @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  version          Int
+  status           RegulationStatus    @default(QARALAMA)
+  title            String
+  purpose          String?
+  duties           String?
+  rights           String?
+  responsibilities String?
+  reportsTo        String?
+  competencies     String?
+  educationReq     String?
+  experienceReq    String?
+  approvedOn       DateTime?           @db.Date
+  approvedBy       String?
+  orderNumber      String?
+  effectiveFrom    DateTime?           @db.Date
+  effectiveTo      DateTime?           @db.Date
+  legalReviewText  String?
+  legalReviewDate  DateTime?           @db.Date
+  legalReviewBy    String?
+  fileName         String?
+  fileExtension    String?
+  fileSize         Int?
+  fileStoragePath  String?
+  createdById      String?
+  createdBy        User?               @relation("JobDescriptionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedById     String?
+  approvedByUser   User?               @relation("JobDescriptionApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  acks             JobDescriptionAck[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([positionId, departmentId, version])
+  @@index([status])
+}
+
+/// Vəzifə təlimatı ilə tanışlıq tapşırığı / qeydi. Yeni versiya təsdiqlənəndə yenisi yaranır, köhnələr silinmir.
+/// acknowledgedAt — əməkdaşın tanış olduğu (kağızda imzaladığı) tarix; acknowledgedBy — qeyd edən HR.
+model JobDescriptionAck {
+  id               String         @id @default(cuid())
+  jobDescriptionId String
+  jobDescription   JobDescription @relation(fields: [jobDescriptionId], references: [id], onDelete: Cascade)
+  employmentId     String
+  employment       Employment     @relation(fields: [employmentId], references: [id], onDelete: Cascade)
+  /// Tapşırığın səbəbi: «Yeni versiya», «İşə qəbul», «Köçürmə»
+  reason           String?
+  assignedAt       DateTime       @default(now())
+  acknowledgedAt   DateTime?      @db.Date
+  acknowledgedById String?
+  acknowledgedBy   User?          @relation("JobDescriptionAckBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  note             String?
+
+  @@unique([jobDescriptionId, employmentId])
+  @@index([employmentId])
+  @@index([acknowledgedAt])
 }
 
 /// «Şəxsi iş» qovluğu: əmrlər, skan edilmiş sənədlər, şəkillər, Word/Excel faylları.
@@ -433,6 +654,10 @@ model PersonDocument {
   uploadedById     String?
   uploadedBy       User?                     @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
   deletionRequests DocumentDeletionRequest[]
+  /// «Yoxlanılıb» işarəsi (TZ M05-01): sənədin əsli ilə tutuşdurulub — kim, nə vaxt
+  verifiedAt       DateTime?
+  verifiedById     String?
+  verifiedBy       User?                     @relation("DocumentVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
@@ -970,6 +1195,8 @@ model User {
   person                    Person?     @relation("UserPerson", fields: [personId], references: [id], onDelete: SetNull)
   /// Məxfi maaşları görə və dəyişə bilər (root verir — məs. kadr şöbəsinin müdiri). Default false
   canViewRestrictedSalaries Boolean     @default(false)
+  /// Əsasnamə və vəzifə təlimatlarını təsdiq edə bilər («charter.approve»; ROOT həmişə). Default false
+  canApproveCharters        Boolean     @default(false)
   passwordChangedAt         DateTime?
   lastLoginAt               DateTime?
   createdById               String?
@@ -989,6 +1216,13 @@ model User {
   financialChanges  FinancialChange[]         @relation("FinancialChangeCreatedBy")
   absencesCreated   Absence[]                 @relation("AbsenceCreatedBy")
   absencesCancelled Absence[]                 @relation("AbsenceCancelledBy")
+  departmentChanges DepartmentChange[]        @relation("DepartmentChangeCreatedBy")
+  chartersCreated   DepartmentCharter[]       @relation("CharterCreatedBy")
+  chartersApproved  DepartmentCharter[]       @relation("CharterApprovedBy")
+  jobDescsCreated   JobDescription[]          @relation("JobDescriptionCreatedBy")
+  jobDescsApproved  JobDescription[]          @relation("JobDescriptionApprovedBy")
+  jobDescAcks       JobDescriptionAck[]       @relation("JobDescriptionAckBy")
+  documentsVerified PersonDocument[]          @relation("DocumentVerifiedBy")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

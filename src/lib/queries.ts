@@ -1,5 +1,6 @@
 import "server-only";
-import type { Prisma, StaffCategory } from "@prisma/client";
+import type { DepartmentKind, Prisma, StaffCategory } from "@prisma/client";
+import { compareDepartments, effectiveKind, structureAsOf, type ChangeRecord } from "./org-structure";
 import { computeLeaveEntitlement, workYearContaining } from "./calc/leave";
 import { computePayroll, primaryEmploymentIds, type PayrollInput } from "./calc/payroll";
 import { computeSeniority, todayUtc } from "./calc/seniority";
@@ -321,6 +322,21 @@ export interface OrgNode {
   level: number;
   isFaculty: boolean;
   isChair: boolean;
+  /** Növ (köhnə qeyddə fakültə/kafedra bayrağından təxmin edilir) */
+  kind: DepartmentKind | null;
+  sortOrder: number | null;
+  /** Ayrıca hüquqi şəxs — üst bölmənin və ümumi cəmlərə daxil edilmir, ayrıca göstərilir */
+  isExternal: boolean;
+  /** Ştatsız qrup / kollegial düyün — öz ştatı və vakansiyası sayılmır */
+  isGroup: boolean;
+  headPositionTitle: string | null;
+  campus: string | null;
+  budgetCenter: string | null;
+  closedOn: string | null; // YYYY-MM-DD
+  /** Qüvvədə olan əsasnamə (təsdiqlənmiş ən son versiya) */
+  charter: { id: string; version: number; title: string; nextReviewOn: string | null } | null;
+  /** Gələcək tarixə planlaşdırılmış (hələ tətbiq olunmamış) dəyişikliklər */
+  planned: number;
   closed: boolean;
   /** Maaşlar məxfidir (bölmənin öz işarəsi; alt bölmələr də məxfi sayılır) */
   salaryRestricted: boolean;
@@ -331,15 +347,32 @@ export interface OrgNode {
   children: OrgNode[];
 }
 
-export async function getOrgTree(): Promise<OrgNode[]> {
-  const [departments, staffing, employments] = await Promise.all([
+/**
+ * Struktur ağacı. asOf verilibsə — həmin günün strukturu (DepartmentChange-dən ad / tabelik bərpası, yaradılma və
+ * bağlanma tarixlərinə görə süzgəc); bu halda heyət və ştat göstəriciləri sıfırdır (yalnız struktur).
+ * Sıra: sortOrder → kod. Ayrıca hüquqi şəxslər üst bölmənin cəminə daxil edilmir.
+ */
+export async function getOrgTree(opts: { asOf?: Date } = {}): Promise<OrgNode[]> {
+  const historical = !!opts.asOf;
+  const [rawDepartments, staffing, employments, charters, planned, changes] = await Promise.all([
     prisma.department.findMany({ orderBy: [{ level: "asc" }, { name: "asc" }] }),
-    latestStaffing(),
-    prisma.employment.findMany({ where: { status: { not: "TERMINATED" }, person: { deletedAt: null } }, select: { departmentId: true, unitShare: true } }),
+    historical ? Promise.resolve([]) : latestStaffing(),
+    historical
+      ? Promise.resolve([])
+      : prisma.employment.findMany({ where: { status: { not: "TERMINATED" }, person: { deletedAt: null } }, select: { departmentId: true, unitShare: true } }),
+    prisma.departmentCharter.findMany({ where: { status: "TESDIQLENIB" }, orderBy: { version: "desc" }, select: { id: true, departmentId: true, version: true, title: true, nextReviewOn: true } }),
+    prisma.departmentChange.groupBy({ by: ["departmentId"], where: { appliedAt: null, cancelledAt: null }, _count: { _all: true } }),
+    historical ? prisma.departmentChange.findMany({ select: { departmentId: true, kind: true, effectiveDate: true, before: true, after: true, appliedAt: true, cancelledAt: true, createdAt: true } }) : Promise.resolve([]),
   ]);
   const today = todayUtc();
+  const asOf = opts.asOf ?? today;
+  const departments = historical ? structureAsOf(rawDepartments, changes as ChangeRecord[], asOf) : rawDepartments;
+  const charterOf = new Map<string, (typeof charters)[number]>();
+  for (const c of charters) if (!charterOf.has(c.departmentId)) charterOf.set(c.departmentId, c);
+  const plannedOf = new Map(planned.map((p) => [p.departmentId, p._count._all]));
   const nodes = new Map<string, OrgNode>();
   for (const d of departments) {
+    const ch = charterOf.get(d.id);
     nodes.set(d.id, {
       id: d.id,
       code: d.code,
@@ -347,7 +380,17 @@ export async function getOrgTree(): Promise<OrgNode[]> {
       level: d.level,
       isFaculty: d.isFaculty,
       isChair: d.isChair,
-      closed: !!d.closedOn && d.closedOn <= today,
+      kind: effectiveKind(d),
+      sortOrder: d.sortOrder,
+      isExternal: d.isExternal,
+      isGroup: d.isGroup,
+      headPositionTitle: d.headPositionTitle,
+      campus: d.campus,
+      budgetCenter: d.budgetCenter,
+      closedOn: d.closedOn ? d.closedOn.toISOString().slice(0, 10) : null,
+      charter: ch ? { id: ch.id, version: ch.version, title: ch.title, nextReviewOn: ch.nextReviewOn?.toISOString().slice(0, 10) ?? null } : null,
+      planned: plannedOf.get(d.id) ?? 0,
+      closed: !!d.closedOn && d.closedOn <= asOf,
       salaryRestricted: d.salaryRestricted,
       createdOn: d.createdOn.toISOString().slice(0, 10),
       units: 0,
@@ -358,7 +401,8 @@ export async function getOrgTree(): Promise<OrgNode[]> {
   }
   for (const s of staffing) {
     const n = nodes.get(s.departmentId);
-    if (n) n.units += s.unitCount;
+    // Ştatsız qrup düyünü: ştat və vakansiya sayılmır
+    if (n && !n.isGroup) n.units += s.unitCount;
   }
   for (const e of employments) {
     const n = nodes.get(e.departmentId);
@@ -374,17 +418,19 @@ export async function getOrgTree(): Promise<OrgNode[]> {
     if (parent) parent.children.push(n);
     else roots.push(n);
   }
-  // Alt bölmələrin göstəricilərini yuxarı toplayırıq
+  // Alt bölmələrin göstəricilərini yuxarı toplayırıq (ayrıca hüquqi şəxslər istisna — onlar ayrıca göstərilir)
   const roll = (n: OrgNode): OrgNode => {
+    n.children.sort(compareDepartments);
     for (const c of n.children) {
       roll(c);
+      if (c.isExternal) continue;
       n.units += c.units;
       n.filled += c.filled;
       n.headcount += c.headcount;
     }
     return n;
   };
-  return roots.map(roll);
+  return roots.sort(compareDepartments).map(roll);
 }
 
 /** Struktur xəritəsində bölmələrin heyəti — hər aktiv müqavilə bir kart */

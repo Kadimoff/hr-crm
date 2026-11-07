@@ -43,6 +43,8 @@ export type SheetKey =
   | "departments2"
   | "departments3"
   | "departments4"
+  | "departments5"
+  | "departments6"
   // 1 Kadr Cədvəlləri
   | "positions"
   | "persons"
@@ -139,6 +141,8 @@ export interface SheetDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   provides?: (row: z.infer<S>) => string;
   /** Siyahı tipli vərəqlər üçün: şəxs üzrə atomik əvəzetmə */
   personScoped?: boolean;
+  /** Könüllü vərəq — faylda olmaması xəbərdarlıq vermir (məs. 5-ci və 6-cı səviyyə bölmələri) */
+  optional?: boolean;
 }
 
 export interface TemplateDef {
